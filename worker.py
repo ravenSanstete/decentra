@@ -59,8 +59,17 @@ def batch_accuracy_fn(model, data_loader):
     return correct / total
 
 
+def random_injection(v_i, sigma=2e-6): # 2e-6
+    return torch.randn_like(v_i) * sigma + torch.ones_like(v_i)* 0.1
+
+
+def generate_random_fault(grad):
+    return [random_injection(x).cuda() for x in grad]
+    
+
+
 class Worker:
-    def __init__(self, wid, batch_generator, model, criterion, test_loader, batch_size = 32, lr = 0.01):
+    def __init__(self, wid, batch_generator, model, criterion, test_loader, batch_size = 32, lr = 0.01, role = True):
         self.wid = wid
         self.generator = batch_generator
         self.model = model
@@ -68,13 +77,14 @@ class Worker:
         self.param = get_parameter(model)
         self.batch_size = batch_size
         self.grad = None
-        logging.debug("Initialize Worker {}".format(wid))
+        logging.debug("Initialize Worker {} Byzantine: {}".format(wid, not role))
         self.cached_grads = list()
         self.lr = lr
         self.test_loader = test_loader
         self.running_loss = 0.0
         self.local_clock = 0
         self.prev_describe = 0
+        self.role = role
 
         
     def local_iter(self):
@@ -93,6 +103,10 @@ class Worker:
         self.model.zero_grad()
         loss.backward()  # with this line invoked, the gradient has been computed
         self.grad = get_grad(self.model)
+
+        # if I am a Byzantine guy
+        if(not self.role):
+            self.grad = generate_random_fault(self.grad)
         return self.grad
     
 

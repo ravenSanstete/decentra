@@ -60,7 +60,7 @@ class Ripple:
     def _gossip(self):
         for idx, nbrs in self.G.adj.items():
             for nbr, _ in nbrs.items():
-                self.worker_map[idx].receive(self.worker_map[idx].grad)
+                self.worker_map[idx].receive(self.worker_map[nbr].grad)
 
     def _aggregate(self):
         for idx in self.G.nodes:
@@ -105,17 +105,17 @@ def initialize_sys(dataset = "mnist"):
     model = model_initializer(dataset)
     model.cuda()
     workers = []
-    config_path = "config.txt"
+    config_path = "config_2.txt"
     worker_num = int(list(open(config_path, 'r'))[0][:-1])
     
     for i in range(worker_num):
-        workers.append(Worker(i, train_loader, model, criterion, test_loader, batch_size))
+        workers.append(Worker(i, train_loader, model, criterion, test_loader, batch_size, role = (not i in [0])))
     
 
     system = Ripple(config_path, workers)
     system.topo_describe()
     system.execute()
-    # system.one_round()
+
     
     
     
