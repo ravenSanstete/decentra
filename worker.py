@@ -16,6 +16,7 @@ from torch.autograd import Variable
 import sys
 from pytorch_memlab import profile
 from torchvision import datasets, transforms
+import torch.autograd as autograd
 
 from model import model_initializer
 from feeder import CircularFeeder
@@ -42,6 +43,15 @@ def reduce_gradients(grads):
     out = list(reduce(f, grads))
     return [x/n for x in out]
 
+def weighted_reduce_gradients(grads, w):
+    n = len(grads)
+    out = [w[0] * x for x in grads[0]]
+    for i in range(1, n):
+        out = [xx + w[i]*yy for xx, yy in zip(out, grads[i])]
+        print(w[i] * grads[i][-1])
+    return out
+    
+
 def batch_accuracy_fn(model, data_loader):
     correct = 0
     total = 0
@@ -65,7 +75,11 @@ def random_injection(v_i, sigma=2e-6): # 2e-6
 
 def generate_random_fault(grad):
     return [random_injection(x).cuda() for x in grad]
-    
+
+def param_distance(paramA, paramB):
+    loss = [F.mse_loss(xx, yy).cpu().detach().numpy() for xx, yy in zip(paramA, paramB)]
+    return np.mean(loss)
+
 
 
 class Worker:
@@ -85,13 +99,18 @@ class Worker:
         self.local_clock = 0
         self.prev_describe = 0
         self.role = role
+        self.theta_0 = get_parameter(model)
+        self.x_0 = None
+        self.y_0 = None
 
+    
         
     def local_iter(self):
         # logging.debug("Round {} Worker {} Local Iteration".format(T, self.wid, len(self.cached_grads)))
         x, y = self.generator.next(self.batch_size)
         x, y = x.cuda(), y.cuda()
-
+        self.x_0 = x
+        self.y_0 = y
         # copy parameter to the model from the current param
         copy_from_param(self.model, self.param)
         
@@ -108,6 +127,32 @@ class Worker:
         if(not self.role):
             self.grad = generate_random_fault(self.grad)
         return self.grad
+
+    def backward_evolve(self, params, P_inv):
+        weighted_params = weighted_reduce_gradients(params, P_inv[:, self.wid])
+        
+        flatten_grad = weighted_reduce_gradients([weighted_params, self.param, self.grad], [1, -1, self.lr])
+        flatten_grad = torch.cat([g.reshape(-1) for g in flatten_grad if g is not None])
+        copy_from_param(self.model, self.param)
+        self.model.zero_grad()
+        f_x = self.model(self.x_0)
+        loss = self.criterion(f_x, self.y_0)
+        grads = autograd.grad([loss], self.model.parameters(), create_graph=True, retain_graph = True)
+        flatten = torch.cat([g.reshape(-1) for g in grads if g is not None])
+        flatten_grad.requires_grad = False
+        print(flatten_grad[-len(grads[-1]):])
+        hvp = autograd.grad([flatten @ flatten_grad], self.model.parameters(), allow_unused=True, retain_graph = True)
+        hvp_flatten =  torch.cat([g.reshape(-1) for g in hvp if g is not None])
+        hvp_flatten.requires_grad = False
+        hvp_2 = autograd.grad([flatten @ hvp_flatten], self.model.parameters(), allow_unused=True)
+
+        theta_minus_1 = weighted_reduce_gradients([weighted_params, self.grad, hvp, hvp_2], [1, self.lr, self.lr, self.lr**2])        
+        # print("Recovered: {}".format(theta_minus_1[-1]))
+        # print("Original: {}".format(self.theta_0[-1]))
+        # print("Current: {}".format(self.param[-1]))
+        logging.debug("Original-Current: {:.5f} Original-Recovered: {:.5f}".format(param_distance(self.theta_0, self.param), param_distance(self.theta_0, theta_minus_1)))
+        
+        
     
 
     def receive(self, grad):
@@ -116,10 +161,17 @@ class Worker:
 
     def aggregate(self):
         # logging.debug("Round {} Worker {} Aggregate {} Gradients & Update".format(T, self.wid, len(self.cached_grads)))
+        # save the previous parameters in the neural net
+        self.theta_0 = [x.data.clone() for x in self.param]
         self.grad = reduce_gradients(self.cached_grads + [self.grad])
         self.param = [x - self.lr * y for x, y in zip(self.param, self.grad)]
         self.cached_grads.clear()
         self.local_clock += 1
+
+        ## after aggregation 
+        ## self.backward_evolve()
+
+        
 
     def evaluate(self, T):
         if(T > 0):

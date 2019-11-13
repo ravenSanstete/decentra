@@ -29,6 +29,12 @@ from worker import Worker
 logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG)
 
 
+P = np.array([[1/3, 1/3, 1/3, 0],
+              [0, 1/3, 1/3, 1/3],
+              [1/3, 0, 1/3, 1/3],
+               [1/3, 1/3, 0, 1/3]])
+P_inv = np.linalg.inv(P)
+logging.debug("Inverse Topology: {}".format(P_inv))
 
 
 
@@ -79,13 +85,27 @@ class Ripple:
     def heartbeat(self, T):
         for idx in self.G.nodes:
             self.worker_map[idx].evaluate(T)
+
+    def collect_params(self):
+        params = []
+        for idx in self.G.nodes:
+            params.append(self.worker_map[idx].param)
+            logging.debug("Worker {} Param {}".format(idx, self.worker_map[idx].param[-1]))
+        return params
         
     def execute(self, max_round = 10000):
+        IDX = 1
         PRINT_FREQ = 100
         for i in range(max_round):
             self.one_round()
             if(i % PRINT_FREQ == 0):
                 self.heartbeat(T = i)
+                logging.info("Backward Inference")
+                self.worker_map[IDX].backward_evolve(self.collect_params(), P_inv)
+        
+
+
+        
                 
             
         
@@ -109,12 +129,11 @@ def initialize_sys(dataset = "mnist"):
     worker_num = int(list(open(config_path, 'r'))[0][:-1])
     
     for i in range(worker_num):
-        workers.append(Worker(i, train_loader, model, criterion, test_loader, batch_size, role = (not i in [0])))
+        workers.append(Worker(i, train_loader, model, criterion, test_loader, batch_size, role = True))
     
-
     system = Ripple(config_path, workers)
     system.topo_describe()
-    system.execute()
+    system.execute(max_round = 10000)
 
     
     
