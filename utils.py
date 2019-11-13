@@ -201,6 +201,39 @@ def weighted_reduce_gradients(grads, w):
     for i in range(1, n):
         out = [xx + w[i]*yy for xx, yy in zip(out, grads[i])]
     return out
+
+
+def split(flattened, params_example):
+    out = []
+    c = 0
+    for param in params_example:
+        out.append(flattened[c:c+param.numel()].reshape(param.shape))
+        c += param.numel()
+    return out
+
+def share_largest_p_param(param, ratio = 0.1):
+    # first flatten the parameter
+    flattened = torch.cat([x.flatten() for x in param])
+    # then select the topk index
+    num = int(ratio * len(flattened))
+    _,idx = torch.abs(flattened).topk(num)
+    mask = torch.zeros_like(flattened)
+    mask[idx] = 1
+    mask = mask.cuda()
+    flattened = mask * flattened
+    return split(flattened, param), idx
+     
+def share_frequent_p_param(param, counter, ratio):
+    # first flatten the parameter
+    flattened = torch.cat([x.flatten() for x in param])
+    # then select the topk index
+    num = int(ratio * len(flattened))
+    _,idx = torch.abs(counter).topk(num)
+    mask = torch.zeros_like(flattened)
+    mask[idx] = 1
+    mask = mask.cuda()
+    flattened = mask * flattened
+    return split(flattened, param)
     
 
 def batch_accuracy_fn(model, data_loader):

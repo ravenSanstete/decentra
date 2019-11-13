@@ -1,4 +1,4 @@
-## simulate a centralized distributed learning system based on selective gradient sharing
+## simulate a centralized distributed learning system based on selective gradient sharing (synchronized)
 import argparse
 import os
 import pprint
@@ -19,6 +19,7 @@ from torchvision import datasets, transforms
 from model import model_initializer
 from feeder import CircularFeeder
 from utils import *
+from functools import partial
 
 import networkx as nx
 import logging
@@ -36,15 +37,24 @@ class Central:
         self.grad = None
         self.model = model
         self.test_loader = test_loader
-
+        self.update_counter = torch.cat([torch.zeros_like(p.flatten()) for p in self.theta])
+ 
+        
     def _local_iter(self):
         for w in self.workers:
             w.local_iter()
 
-    def _aggregate(self):
+    def _receive(self, mechanism = None):
         for w in self.workers:
-            self.cached_grads.append(w.send())
+            grad = w.send()
+            if(mechanism):
+                grad, idx = mechanism(grad)
+                self.update_counter[idx] += 1
+            self.cached_grads.append(grad)
+    
+    def _aggregate(self):
         self.grad = reduce_gradients(self.cached_grads)
+        self.cached_grads.clear()
 
     def _update(self, lr):
         self.theta = weighted_reduce_gradients([self.theta, self.grad], [1, -lr])
@@ -53,12 +63,30 @@ class Central:
         for w in self.workers:
             w.central_receive(self.theta)
 
+    def _selective_distribute(self, ratio_d = 1.0):
+        for w in self.workers:
+            w.central_receive(share_frequent_p_param(self.theta, self.update_counter, ratio = ratio_d))
+            # print(selected[-1])
+
+            
     def one_round(self, lr = 0.01):
+        # self._distribute()
         self._distribute()
         self._local_iter()
+        self._receive()
         self._aggregate()
         self._update(lr)
 
+    def selective_gradient_sharing(self, lr = 0.01):
+        ratio_r = 0.001
+        sharing_mec = partial(share_largest_p_param, ratio = ratio_r)
+        self._selective_distribute(ratio_d = 1.0)
+        self._local_iter()
+        self._receive(sharing_mec)
+        self._aggregate()
+        self._update(lr)
+        
+        
     def evaluate(self):
         copy_from_param(self.model, self.theta)
         return batch_accuracy_fn(self.model, self.test_loader)
@@ -67,7 +95,8 @@ class Central:
     def execute(self, max_round = 1000):
         PRINT_FREQ = 100
         for i in range(max_round):
-            self.one_round()
+            # self.one_round()
+            self.selective_gradient_sharing()
             if(i % PRINT_FREQ == 0):
                 acc = self.evaluate()
                 logging.debug("Round {} Accuracy {:.4f}".format(i, acc))
@@ -89,7 +118,7 @@ def initialize_sys(dataset = "mnist", worker_num = 10):
         workers.append(Worker(i, train_loader, model, criterion, test_loader, batch_size, role = True))
     
     system = Central(workers, model, test_loader)
-    system.execute(max_round = 1000)
+    system.execute(max_round = 10000)
                 
                 
             

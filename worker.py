@@ -74,6 +74,7 @@ class Worker:
             self.grad = generate_random_fault(self.grad)
         return self.grad
 
+    ## for the backward inference purposes
     def backward_evolve(self, params, P_inv):
         weighted_params = weighted_reduce_gradients(params, P_inv[:, self.wid])
         
