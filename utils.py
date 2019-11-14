@@ -254,7 +254,7 @@ def batch_accuracy_fn(model, data_loader):
 
 
 def random_injection(v_i, sigma=2e-6): # 2e-6
-    return torch.randn_like(v_i) * sigma + torch.ones_like(v_i)* 0.1
+    return torch.randn_like(v_i) * sigma + torch.ones_like(v_i)* 0.0001
 
 
 def generate_random_fault(grad):

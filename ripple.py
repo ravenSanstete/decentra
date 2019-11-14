@@ -27,12 +27,19 @@ import logging
 from worker import Worker
 
 import argparse
+from multiprocessing.pool import ThreadPool
+from concurrent.futures import ThreadPoolExecutor
+import concurrent.futures as futures
+import threading
+
 parser = argparse.ArgumentParser(description='Ripple Attack')
-parser.add_argument("-c", type=str, default='config_toy.json', help = "path that contains the configuration of the system topology")
+parser.add_argument("-c", type=str, default='config_toy.txt', help = "path that contains the configuration of the system topology")
 parser.add_argument("--dataset", type=str, default = "mnist", help = 'the dataset we use for testing')
 parser.add_argument("-b", action="store_true", help = "whether the system topo is bidirectional or not")
-
+parser.add_argument("--atk", type=str, default="NORMAL", help="the role of worker 0, the only adversary in the system")
+parser.add_argument("-n", type=int, default = 1, help = "the physical worker num")
 ARGS = parser.parse_args()
+
 
 
 
@@ -53,16 +60,30 @@ logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG)
 # P_inv = np.linalg.inv(P)
 # logging.debug("Inverse Topology: {}".format(P_inv))
 
+def local_iteration(worker, model_pool):
+    # logging.info("thread id: {} name: {}".format(threading.get_ident(),threading.current_thread().getName()))
+    thread_idx = int(threading.current_thread().getName().split('-')[-1])-1
+    worker.model = model_pool[thread_idx]
+    worker.local_iter()
+    return True
+
+def heartbeat(worker, model_pool, T):
+    thread_idx = int(threading.current_thread().getName().split('-')[-1])-1
+    worker.model = model_pool[thread_idx]
+    worker.evaluate(T)
+    return True
 
 
 class Ripple:
-    def __init__(self, config_path, workers = None, directed = False):
+    def __init__(self, config_path, model_pool, workers = None, directed = False, n = 4):
         # load the system topology
         logging.debug("Load Sys. Topo.")
         self.construct_system_topo(config_path, directed)
         logging.debug("Associate Workers with the Sys. Topo")
         self.worker_map = {i : workers[i] for i in range(self.N)}
         self.directed = directed
+        self.thread_pool = ThreadPoolExecutor(max_workers=n)
+        self.model_pool = model_pool
 
         
     def construct_system_topo(self, config_path, directed):
@@ -78,9 +99,21 @@ class Ripple:
                 if(len(link) > 0):
                     self.G.add_edge(link[0], link[1])
 
+                    
     def _local_iter(self):
+        tasks = []
         for idx in self.G.nodes:
-            self.worker_map[idx].local_iter()
+            future = self.thread_pool.submit(local_iteration, self.worker_map[idx], self.model_pool)
+            tasks.append(future)
+        # print(tasks)
+        for future in futures.as_completed(tasks):
+            res = future.result()
+            # print(res)
+        return
+            # self.worker_map[idx].local_iter()
+
+
+
 
     def _gossip(self):
         for idx, nbrs in self.G.adj.items():
@@ -93,12 +126,15 @@ class Ripple:
             
     def one_round(self, T = 0):
         self._local_iter()
+        # a synchronization barrier
+
+        
         self._gossip()
         self._aggregate()
         
     # describe the statc topology of the distributed system    
     def topo_describe(self):
-        logging.debug("Worker Map {}".format(self.worker_map))
+        # logging.debug("Worker Map {}".format(self.worker_map))
         logging.debug("Existing Channels (Bi={}) {}".format(not self.directed, list(self.G.edges)))
         for idx, nbrs in self.G.adj.items():
             info = "Worker {}'s Neighbor:".format(idx)
@@ -108,6 +144,16 @@ class Ripple:
         
 
     def heartbeat(self, T):
+        tasks = []
+        for idx in self.G.nodes:
+            future = self.thread_pool.submit(heartbeat, self.worker_map[idx], self.model_pool, T)
+            tasks.append(future)
+        # print(tasks)
+        for future in futures.as_completed(tasks):
+            res = future.result()
+            # print(res)
+        return
+
         for idx in self.G.nodes:
             self.worker_map[idx].evaluate(T)
 
@@ -138,16 +184,6 @@ class Ripple:
                 # print(self.worker_map[1].param[-1])
                 # self.worker_map[IDX].backward_evolve(self.collect_params(), P_inv)
         
-
-
-        
-                
-            
-        
-
-
-    
-
                     
 # construct a homo  
 def initialize_sys(dataset = "mnist", config_path = 'config.txt'):
@@ -157,8 +193,13 @@ def initialize_sys(dataset = "mnist", config_path = 'config.txt'):
     train_loader = CircularFeeder(train_set, verbose = False)
     test_loader = torch.utils.data.DataLoader(test_set, batch_size = batch_size)
     criterion = F.cross_entropy
-    model = model_initializer(dataset)
-    model.cuda()
+    model_pool = []
+    for i in range(ARGS.n):
+        model = model_initializer(dataset)
+        model.cuda()
+        model_pool.append(model)
+
+    print(model_pool)
     workers = []
     # config_path = "config_3.txt"
     worker_num = int(list(open(config_path, 'r'))[0][:-1])
@@ -166,11 +207,11 @@ def initialize_sys(dataset = "mnist", config_path = 'config.txt'):
     # roles = ["NORMAL", "NORMAL", "NORMAL", "NORMAL", "NORMAL"]
     # roles = ["RF", "NORMAL", "NORMAL", "NORMAL", "NORMAL"]
     roles = ["NORMAL"]*worker_num
-    roles[0] = "RF"
+    roles[0] = ARGS.atk
     for i in range(worker_num):
-        workers.append(Worker(i, train_loader, model, criterion, test_loader, batch_size, role = roles[i]))
+        workers.append(Worker(i, train_loader, model_pool[0], criterion, test_loader, batch_size, role = roles[i]))
     
-    system = Ripple(config_path, workers, directed = not ARGS.b)
+    system = Ripple(config_path, model_pool, workers, directed = not ARGS.b, n=ARGS.n)
     system.topo_describe()
     system.execute(max_round = 10000)
 
