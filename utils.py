@@ -178,6 +178,93 @@ class ProgressMeter(object):
         return '[' + fmt + '/' + fmt.format(num_batches) + ']'
 
 
+## other model manipulation functions
+def get_parameter(model):
+    return [param.clone().detach() for param in model.parameters()]
+
+def get_grad(model):
+    return [param.grad.data.clone().detach() for param in model.parameters()]
+
+def copy_from_param(model, parameters):
+    for a, b in zip(model.parameters(), parameters):
+        a.data.copy_(b.data)
+
+def reduce_gradients(grads):
+    n = len(grads)
+    f = lambda x, y: [xx + yy for xx, yy in zip(x, y)]
+    out = list(reduce(f, grads))
+    return [x/n for x in out]
+
+def weighted_reduce_gradients(grads, w):
+    n = len(grads)
+    out = [w[0] * x for x in grads[0]]
+    for i in range(1, n):
+        out = [xx + w[i]*yy for xx, yy in zip(out, grads[i])]
+    return out
+
+
+def split(flattened, params_example):
+    out = []
+    c = 0
+    for param in params_example:
+        out.append(flattened[c:c+param.numel()].reshape(param.shape))
+        c += param.numel()
+    return out
+
+def share_largest_p_param(param, ratio = 0.1):
+    # first flatten the parameter
+    flattened = torch.cat([x.flatten() for x in param])
+    # then select the topk index
+    num = int(ratio * len(flattened))
+    _,idx = torch.abs(flattened).topk(num)
+    mask = torch.zeros_like(flattened)
+    mask[idx] = 1
+    mask = mask.cuda()
+    flattened = mask * flattened
+    return split(flattened, param), idx
+     
+def share_frequent_p_param(param, counter, ratio):
+    # first flatten the parameter
+    flattened = torch.cat([x.flatten() for x in param])
+    # then select the topk index
+    num = int(ratio * len(flattened))
+    _,idx = torch.abs(counter).topk(num)
+    mask = torch.zeros_like(flattened)
+    mask[idx] = 1
+    mask = mask.cuda()
+    flattened = mask * flattened
+    return split(flattened, param)
+    
+
+def batch_accuracy_fn(model, data_loader):
+    correct = 0
+    total = 0
+    model.eval()
+    with torch.no_grad():
+        for data in data_loader:
+            images, labels = data
+            images = images.cuda()
+            labels = labels.cuda()
+            outputs = model(images)
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+    model.train()
+    return correct / total
+
+
+def random_injection(v_i, sigma=2e-6): # 2e-6
+    return torch.randn_like(v_i) * sigma + torch.ones_like(v_i)* 0.0001
+
+
+def generate_random_fault(grad):
+    return [random_injection(x).cuda() for x in grad]
+
+def param_distance(paramA, paramB):
+    loss = [F.mse_loss(xx, yy).cpu().detach().numpy() for xx, yy in zip(paramA, paramB)]
+    return np.mean(loss)
+
+
 
 if __name__ == '__main__':
     # load_mnist_validation_set(100)
