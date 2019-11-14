@@ -25,11 +25,15 @@ from functools import reduce
 import logging
 logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG)
 
+def generate_two_hop_poison(param, grad, lr):
+    K = 2
+    # should determine the amplitude of the poison based on the blacksheep's out degree - 1
+    poison = generate_random_fault(grad)
+    return weighted_reduce_gradients([param, grad, poison], [-1, lr, 1])
 
-
-
+## hook: param, grad -> None (for print information per log point)
 class Worker:
-    def __init__(self, wid, batch_generator, model, criterion, test_loader, batch_size = 32, lr = 0.01, role = True):
+    def __init__(self, wid, batch_generator, model, criterion, test_loader, batch_size = 32, lr = 0.01, role = True, hook = None):
         self.wid = wid
         self.generator = batch_generator
         self.model = model
@@ -37,7 +41,7 @@ class Worker:
         self.param = get_parameter(model)
         self.batch_size = batch_size
         self.grad = None
-        logging.debug("Initialize Worker {} Byzantine: {}".format(wid, not role))
+        logging.debug("Initialize Worker {} Byzantine: {}".format(wid, role))
         self.cached_grads = list()
         self.lr = lr
         self.test_loader = test_loader
@@ -70,8 +74,14 @@ class Worker:
         self.grad = get_grad(self.model)
 
         # if I am a Byzantine guy
-        if(not self.role):
+        if(self.role == "RF"):
             self.grad = generate_random_fault(self.grad)
+        elif(self.role == "BSHEEP"):
+            self.grad = generate_two_hop_poison(self.param, self.grad, self.lr)
+        else:
+            # norm guy
+            pass
+        
         return self.grad
 
     ## for the backward inference purposes
@@ -114,6 +124,7 @@ class Worker:
         self.param = [x - self.lr * y for x, y in zip(self.param, self.grad)]
         self.cached_grads.clear()
         self.local_clock += 1
+
 
         ## after aggregation 
         ## self.backward_evolve()

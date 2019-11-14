@@ -26,6 +26,13 @@ import logging
 
 from worker import Worker
 
+
+SEED = 8657
+logging.debug("Random SEED: {}".format(SEED))
+torch.manual_seed(SEED)
+np.random.seed(SEED)
+
+
 logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG)
 
 
@@ -95,13 +102,15 @@ class Ripple:
         
     def execute(self, max_round = 10000):
         IDX = 1
-        PRINT_FREQ = 100
+        PRINT_FREQ = 1
         for i in range(max_round):
             self.one_round()
+            # if(i == 1):
+            #    print(self.worker_map[1].param)
             if(i % PRINT_FREQ == 0):
                 self.heartbeat(T = i)
                 logging.info("Backward Inference")
-                self.worker_map[IDX].backward_evolve(self.collect_params(), P_inv)
+                # self.worker_map[IDX].backward_evolve(self.collect_params(), P_inv)
         
 
 
@@ -115,7 +124,7 @@ class Ripple:
 
                     
 # construct a homo  
-def initialize_sys(dataset = "mnist"):
+def initialize_sys(dataset = "mnist", config_path = 'config.txt'):
     batch_size = 32
     logging.debug("Construct a Homogeneous DDL System {}".format(dataset))
     train_set, test_set = load_dataset(dataset)
@@ -125,13 +134,15 @@ def initialize_sys(dataset = "mnist"):
     model = model_initializer(dataset)
     model.cuda()
     workers = []
-    config_path = "config_2.txt"
+    # config_path = "config_3.txt"
     worker_num = int(list(open(config_path, 'r'))[0][:-1])
+    # roles = ["BSHEEP", "NORMAL", "NORMAL"]
+    roles = ["NORMAL", "NORMAL", "NORMAL"]
     
     for i in range(worker_num):
-        workers.append(Worker(i, train_loader, model, criterion, test_loader, batch_size, role = True))
+        workers.append(Worker(i, train_loader, model, criterion, test_loader, batch_size, role = roles[i]))
     
-    system = Ripple(config_path, workers)
+    system = Ripple(config_path, workers, directed = True)
     system.topo_describe()
     system.execute(max_round = 10000)
 
@@ -145,7 +156,7 @@ def initialize_sys(dataset = "mnist"):
     
 
 if __name__ == '__main__':
-    initialize_sys("cifar10")
+    initialize_sys(dataset = "mnist", config_path = "config_toy.txt")
 
     
         
