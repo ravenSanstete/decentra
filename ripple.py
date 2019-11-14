@@ -30,7 +30,7 @@ import argparse
 parser = argparse.ArgumentParser(description='Ripple Attack')
 parser.add_argument("-c", type=str, default='config_toy.json', help = "path that contains the configuration of the system topology")
 parser.add_argument("--dataset", type=str, default = "mnist", help = 'the dataset we use for testing')
-
+parser.add_argument("-b", action="store_true", help = "whether the system topo is bidirectional or not")
 
 ARGS = parser.parse_args()
 
@@ -62,6 +62,8 @@ class Ripple:
         self.construct_system_topo(config_path, directed)
         logging.debug("Associate Workers with the Sys. Topo")
         self.worker_map = {i : workers[i] for i in range(self.N)}
+        self.directed = directed
+
         
     def construct_system_topo(self, config_path, directed):
         f = list(open(config_path, 'r'))
@@ -97,7 +99,7 @@ class Ripple:
     # describe the statc topology of the distributed system    
     def topo_describe(self):
         logging.debug("Worker Map {}".format(self.worker_map))
-        logging.debug("Existing Channels {}".format(list(self.G.edges)))
+        logging.debug("Existing Channels (Bi={}) {}".format(not self.directed, list(self.G.edges)))
 
     def heartbeat(self, T):
         for idx in self.G.nodes:
@@ -114,8 +116,9 @@ class Ripple:
         IDX = 1
         PRINT_FREQ = 100
         for i in range(max_round):
-            # if(i in [0 ,1]):
-            #     print(self.worker_map[0].param[-1])
+            if(i in [0 ,1]):
+                print(self.worker_map[1].param[-1])
+                print(self.worker_map[0].param[-1])
             #     print(self.worker_map[1].param[-1])
                 
             self.one_round(i)
@@ -124,6 +127,7 @@ class Ripple:
             if(i % PRINT_FREQ == 0):
                 self.heartbeat(T = i)
                 logging.info("Backward Inference")
+                # print(self.worker_map[1].param[-1])
                 # self.worker_map[IDX].backward_evolve(self.collect_params(), P_inv)
         
 
@@ -150,14 +154,15 @@ def initialize_sys(dataset = "mnist", config_path = 'config.txt'):
     workers = []
     # config_path = "config_3.txt"
     worker_num = int(list(open(config_path, 'r'))[0][:-1])
-    # roles = ["BSHEEP", "NORMAL", "NORMAL"]
-    roles = ["NORMAL", "NORMAL", "NORMAL", "NORMAL", "NORMAL"]
-    # roles = ["BSHEEP", "NORMAL", "NORMAL", "NORMAL", "NORMAL"]
-    
+    # roles = ["RF", "NORMAL", "NORMAL", "NORMAL", "NORMAL"]
+    # roles = ["NORMAL", "NORMAL", "NORMAL", "NORMAL", "NORMAL"]
+    # roles = ["RF", "NORMAL", "NORMAL", "NORMAL", "NORMAL"]
+    roles = ["NORMAL"]*worker_num
+    roles[0] = "BSHEEP"
     for i in range(worker_num):
         workers.append(Worker(i, train_loader, model, criterion, test_loader, batch_size, role = roles[i]))
     
-    system = Ripple(config_path, workers, directed = True)
+    system = Ripple(config_path, workers, directed = ARGS.b)
     system.topo_describe()
     system.execute(max_round = 10000)
 

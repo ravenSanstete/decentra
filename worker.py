@@ -29,7 +29,7 @@ def generate_two_hop_poison(param, grad, lr):
     K = 2
     # should determine the amplitude of the poison based on the blacksheep's out degree - 1
     poison = generate_random_fault(grad)
-    return weighted_reduce_gradients([param, grad, poison], [-1, lr, 1]), poison
+    return weighted_reduce_gradients([param, grad, poison], [-1, lr, 2]), poison
 
 ## hook: param, grad -> None (for print information per log point)
 class Worker:
