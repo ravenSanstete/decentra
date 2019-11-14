@@ -29,7 +29,7 @@ def generate_two_hop_poison(param, grad, lr):
     K = 2
     # should determine the amplitude of the poison based on the blacksheep's out degree - 1
     poison = generate_random_fault(grad)
-    return weighted_reduce_gradients([param, grad, poison], [-1, lr, 1])
+    return weighted_reduce_gradients([param, grad, poison], [-1, lr, 1]), poison
 
 ## hook: param, grad -> None (for print information per log point)
 class Worker:
@@ -75,14 +75,15 @@ class Worker:
 
         # if I am a Byzantine guy
         if(self.role == "RF"):
-            self.grad = generate_random_fault(self.grad)
+            self.poison = generate_random_fault(self.grad)
+            self.param =  weighted_reduce_gradients([self.param, self.grad], [1, -self.lr])
         elif(self.role == "BSHEEP"):
-            self.grad = generate_two_hop_poison(self.param, self.grad, self.lr)
+            self.poison, self.param = generate_two_hop_poison(self.param, self.grad, self.lr)
+            # to maintain the random fault poison on the blacksheep 
         else:
-            # norm guy
-            pass
-        
-        return self.grad
+            # norm guy, update the parameter
+            self.param = weighted_reduce_gradients([self.param, self.grad], [1, -self.lr])
+        return self.param
 
     ## for the backward inference purposes
     def backward_evolve(self, params, P_inv):
@@ -120,14 +121,24 @@ class Worker:
         # logging.debug("Round {} Worker {} Aggregate {} Gradients & Update".format(T, self.wid, len(self.cached_grads)))
         # save the previous parameters in the neural net
         self.theta_0 = [x.data.clone() for x in self.param]
-        self.grad = reduce_gradients(self.cached_grads + [self.grad])
-        self.param = [x - self.lr * y for x, y in zip(self.param, self.grad)]
+
+        # if(self.wid == 1):
+        #     print(self.cached_grads[0][-1])
+        #     print(self.param[-1])
+            
+        self.param = reduce_gradients(self.cached_grads + [self.param])
+        # self.param = [x - self.lr * y for x, y in zip(self.param, self.grad)]
         self.cached_grads.clear()
         self.local_clock += 1
-
+        
 
         ## after aggregation 
         ## self.backward_evolve()
+    def send_param(self):
+        if(self.role in ["BSHEEP", "RF"]):
+            return self.poison
+        else:
+            return self.param
 
     # used for the centralized settings 
     def send(self):

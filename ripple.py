@@ -26,6 +26,16 @@ import logging
 
 from worker import Worker
 
+import argparse
+parser = argparse.ArgumentParser(description='Ripple Attack')
+parser.add_argument("-c", type=str, default='config_toy.json', help = "path that contains the configuration of the system topology")
+parser.add_argument("--dataset", type=str, default = "mnist", help = 'the dataset we use for testing')
+
+
+ARGS = parser.parse_args()
+
+
+
 
 SEED = 8657
 logging.debug("Random SEED: {}".format(SEED))
@@ -36,12 +46,12 @@ np.random.seed(SEED)
 logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG)
 
 
-P = np.array([[1/3, 1/3, 1/3, 0],
-              [0, 1/3, 1/3, 1/3],
-              [1/3, 0, 1/3, 1/3],
-               [1/3, 1/3, 0, 1/3]])
-P_inv = np.linalg.inv(P)
-logging.debug("Inverse Topology: {}".format(P_inv))
+# P = np.array([[1/3, 1/3, 1/3, 0],
+#               [0, 1/3, 1/3, 1/3],
+#               [1/3, 0, 1/3, 1/3],
+#                [1/3, 1/3, 0, 1/3]])
+# P_inv = np.linalg.inv(P)
+# logging.debug("Inverse Topology: {}".format(P_inv))
 
 
 
@@ -73,13 +83,13 @@ class Ripple:
     def _gossip(self):
         for idx, nbrs in self.G.adj.items():
             for nbr, _ in nbrs.items():
-                self.worker_map[idx].receive(self.worker_map[nbr].grad)
+                self.worker_map[idx].receive(self.worker_map[nbr].send_param())
 
     def _aggregate(self):
         for idx in self.G.nodes:
             self.worker_map[idx].aggregate()
             
-    def one_round(self):
+    def one_round(self, T = 0):
         self._local_iter()
         self._gossip()
         self._aggregate()
@@ -97,16 +107,20 @@ class Ripple:
         params = []
         for idx in self.G.nodes:
             params.append(self.worker_map[idx].param)
-            logging.debug("Worker {} Param {}".format(idx, self.worker_map[idx].param[-1]))
+            # logging.debug("Worker {} Param {}".format(idx, self.worker_map[idx].param[-1]))
         return params
         
     def execute(self, max_round = 10000):
         IDX = 1
-        PRINT_FREQ = 1
+        PRINT_FREQ = 100
         for i in range(max_round):
-            self.one_round()
+            # if(i in [0 ,1]):
+            #     print(self.worker_map[0].param[-1])
+            #     print(self.worker_map[1].param[-1])
+                
+            self.one_round(i)
             # if(i == 1):
-            #    print(self.worker_map[1].param)
+            # print(self.worker_map[1].param)
             if(i % PRINT_FREQ == 0):
                 self.heartbeat(T = i)
                 logging.info("Backward Inference")
@@ -137,7 +151,8 @@ def initialize_sys(dataset = "mnist", config_path = 'config.txt'):
     # config_path = "config_3.txt"
     worker_num = int(list(open(config_path, 'r'))[0][:-1])
     # roles = ["BSHEEP", "NORMAL", "NORMAL"]
-    roles = ["NORMAL", "NORMAL", "NORMAL"]
+    roles = ["NORMAL", "NORMAL", "NORMAL", "NORMAL", "NORMAL"]
+    # roles = ["BSHEEP", "NORMAL", "NORMAL", "NORMAL", "NORMAL"]
     
     for i in range(worker_num):
         workers.append(Worker(i, train_loader, model, criterion, test_loader, batch_size, role = roles[i]))
@@ -156,7 +171,7 @@ def initialize_sys(dataset = "mnist", config_path = 'config.txt'):
     
 
 if __name__ == '__main__':
-    initialize_sys(dataset = "mnist", config_path = "config_toy.txt")
+    initialize_sys(dataset = ARGS.dataset, config_path = ARGS.c)
 
     
         
