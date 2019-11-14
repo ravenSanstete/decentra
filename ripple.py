@@ -100,6 +100,12 @@ class Ripple:
     def topo_describe(self):
         logging.debug("Worker Map {}".format(self.worker_map))
         logging.debug("Existing Channels (Bi={}) {}".format(not self.directed, list(self.G.edges)))
+        for idx, nbrs in self.G.adj.items():
+            info = "Worker {}'s Neighbor:".format(idx)
+            for nbr, _ in nbrs.items():
+                info += str(nbr)+", "
+            logging.info(info)
+        
 
     def heartbeat(self, T):
         for idx in self.G.nodes:
@@ -116,9 +122,8 @@ class Ripple:
         IDX = 1
         PRINT_FREQ = 100
         for i in range(max_round):
-            if(i in [0 ,1]):
-                print(self.worker_map[1].param[-1])
-                print(self.worker_map[0].param[-1])
+            # if(i in [0 ,1]):
+
             #     print(self.worker_map[1].param[-1])
                 
             self.one_round(i)
@@ -126,7 +131,10 @@ class Ripple:
             # print(self.worker_map[1].param)
             if(i % PRINT_FREQ == 0):
                 self.heartbeat(T = i)
-                logging.info("Backward Inference")
+                # logging.info("Backward Inference")
+                logging.debug("Worker 1: {}".format(self.worker_map[1].param[-1]))
+                logging.debug("Worker 2: {}".format(self.worker_map[2].param[-1]))
+                logging.debug("Worker 0: {}".format(self.worker_map[0].param[-1]))
                 # print(self.worker_map[1].param[-1])
                 # self.worker_map[IDX].backward_evolve(self.collect_params(), P_inv)
         
@@ -158,11 +166,11 @@ def initialize_sys(dataset = "mnist", config_path = 'config.txt'):
     # roles = ["NORMAL", "NORMAL", "NORMAL", "NORMAL", "NORMAL"]
     # roles = ["RF", "NORMAL", "NORMAL", "NORMAL", "NORMAL"]
     roles = ["NORMAL"]*worker_num
-    roles[0] = "BSHEEP"
+    roles[0] = "RF"
     for i in range(worker_num):
         workers.append(Worker(i, train_loader, model, criterion, test_loader, batch_size, role = roles[i]))
     
-    system = Ripple(config_path, workers, directed = ARGS.b)
+    system = Ripple(config_path, workers, directed = not ARGS.b)
     system.topo_describe()
     system.execute(max_round = 10000)
 
