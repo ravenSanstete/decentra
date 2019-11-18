@@ -15,6 +15,10 @@ from torch.autograd import Variable
 import sys
 from pytorch_memlab import profile
 from torchvision import datasets, transforms
+import torch.utils.data as data_utils
+from itertools import cycle
+
+
 
 from model import model_initializer
 from feeder import CircularFeeder
@@ -26,7 +30,7 @@ import logging
 
 from worker import Worker
 
-logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG)
+logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG, filemode = 'w+')
 
 
 import argparse
@@ -40,7 +44,7 @@ ARGS = parser.parse_args()
 logger = logging.getLogger('server_logger')
 logger.setLevel(logging.DEBUG)
 
-fh = logging.FileHandler('logs/trace_{}.log'.format(ARGS.eta_d))
+fh = logging.FileHandler('logs/trace_{}.log'.format(ARGS.eta_d), mode='w+')
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 fh.setFormatter(formatter)
 fh.setLevel(logging.DEBUG)
@@ -125,19 +129,34 @@ class Central:
 
 
 
+
+
 def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
     batch_size = 32
     logging.debug("Construct a Centralized DDL System {} Download Ratio: {:.4f} Upload Ratio {:.4f}".format(dataset, eta_d, eta_r))
     train_set, test_set = load_dataset(dataset)
     train_loader = CircularFeeder(train_set, verbose = False)
+    #
+    worker_data_size = 600
+
+    # initialize train loaders 
+    train_loaders = []
+    logging.debug("Initizalize training loaders")
+    for i in range(worker_num):
+        x, y = train_loader.next(worker_data_size)
+        ds = data_utils.TensorDataset(x, y)
+        train_loaders.append(cycle(list(data_utils.DataLoader(ds, batch_size = batch_size, shuffle = True))))
+    
+        
+    
     test_loader = torch.utils.data.DataLoader(test_set, batch_size = batch_size)
     criterion = F.cross_entropy
     model = model_initializer(dataset)
     model.cuda()
     workers = []
- 
+     
     for i in range(worker_num):
-        workers.append(Worker(i, train_loader, model, criterion, test_loader, batch_size, role = True))
+        workers.append(Worker(i, train_loaders[i], model, criterion, test_loader, batch_size, role = True))
     
     system = Central(workers, model, test_loader, eta_d = eta_d, eta_r = eta_r)
     system.execute(max_round = 20000)

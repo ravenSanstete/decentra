@@ -57,7 +57,7 @@ class Worker:
         
     def local_iter(self):
         # logging.debug("Round {} Worker {} Local Iteration".format(T, self.wid, len(self.cached_grads)))
-        x, y = self.generator.next(self.batch_size)
+        x, y = next(self.generator)
         x, y = x.cuda(), y.cuda()
         self.x_0 = x
         self.y_0 = y
@@ -121,7 +121,6 @@ class Worker:
         # logging.debug("Round {} Worker {} Aggregate {} Gradients & Update".format(T, self.wid, len(self.cached_grads)))
         # save the previous parameters in the neural net
         self.theta_0 = [x.data.clone() for x in self.param]
-
         # if(self.wid == 1):
         #     print(self.cached_grads[0][-1])
         #     print(self.param[-1])
@@ -149,7 +148,7 @@ class Worker:
         # central receive should replace the non-vanishing parameters, while preserve the original parameter with a vanishing update
         for i in range(len(self.param)):
             self.param[i] = replace_non_vanish(self.param[i], theta[i])
-            
+        
             
         
         
