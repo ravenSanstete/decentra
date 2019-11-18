@@ -264,6 +264,12 @@ def param_distance(paramA, paramB):
     loss = [F.mse_loss(xx, yy).cpu().detach().numpy() for xx, yy in zip(paramA, paramB)]
     return np.mean(loss)
 
+def replace_non_vanish(original, current):
+    # generate mask from current
+    mask = (current == 0.0).to(torch.float).cuda()
+    original = original  * mask
+    return original + current
+    
 
 
 if __name__ == '__main__':

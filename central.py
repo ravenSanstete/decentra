@@ -29,8 +29,27 @@ from worker import Worker
 logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG)
 
 
+import argparse
+
+
+parser = argparse.ArgumentParser(description='Fairness')
+parser.add_argument("--eta_d", type=float, default=1.0, help = "the proportion of downloadable parameters")
+parser.add_argument("-n", type=int, default=10, help = "the number of workers")
+ARGS = parser.parse_args()
+
+logger = logging.getLogger('server_logger')
+logger.setLevel(logging.DEBUG)
+
+fh = logging.FileHandler('logs/trace_{}.log'.format(ARGS.eta_d))
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+fh.setFormatter(formatter)
+fh.setLevel(logging.DEBUG)
+logger.addHandler(fh)
+logging = logger
+
+
 class Central:
-    def __init__(self, workers, model, test_loader):
+    def __init__(self, workers, model, test_loader, eta_d = 1.0, eta_r = 1.0):
         self.workers = workers
         self.theta = get_parameter(model)
         self.cached_grads = []
@@ -38,6 +57,10 @@ class Central:
         self.model = model
         self.test_loader = test_loader
         self.update_counter = torch.cat([torch.zeros_like(p.flatten()) for p in self.theta])
+        # the prop. of params for downloading
+        self.eta_d = eta_d
+        # the prop. of params for uploading
+        self.eta_r = eta_r
  
         
     def _local_iter(self):
@@ -63,7 +86,7 @@ class Central:
         for w in self.workers:
             w.central_receive(self.theta)
 
-    def _selective_distribute(self, ratio_d = 1.0):
+    def _selective_distribute(self, ratio_d):
         for w in self.workers:
             w.central_receive(share_frequent_p_param(self.theta, self.update_counter, ratio = ratio_d))
             # print(selected[-1])
@@ -78,9 +101,8 @@ class Central:
         self._update(lr)
 
     def selective_gradient_sharing(self, lr = 0.01):
-        ratio_r = 0.001
-        sharing_mec = partial(share_largest_p_param, ratio = ratio_r)
-        self._selective_distribute(ratio_d = 1.0)
+        sharing_mec = partial(share_largest_p_param, ratio = self.eta_r)
+        self._selective_distribute(ratio_d = self.eta_d)
         self._local_iter()
         self._receive(sharing_mec)
         self._aggregate()
@@ -103,9 +125,9 @@ class Central:
 
 
 
-def initialize_sys(dataset = "mnist", worker_num = 10):
+def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
     batch_size = 32
-    logging.debug("Construct a Centralized DDL System {}".format(dataset))
+    logging.debug("Construct a Centralized DDL System {} Download Ratio: {:.4f} Upload Ratio {:.4f}".format(dataset, eta_d, eta_r))
     train_set, test_set = load_dataset(dataset)
     train_loader = CircularFeeder(train_set, verbose = False)
     test_loader = torch.utils.data.DataLoader(test_set, batch_size = batch_size)
@@ -117,8 +139,8 @@ def initialize_sys(dataset = "mnist", worker_num = 10):
     for i in range(worker_num):
         workers.append(Worker(i, train_loader, model, criterion, test_loader, batch_size, role = True))
     
-    system = Central(workers, model, test_loader)
-    system.execute(max_round = 10000)
+    system = Central(workers, model, test_loader, eta_d = eta_d, eta_r = eta_r)
+    system.execute(max_round = 20000)
                 
                 
             
@@ -127,7 +149,7 @@ def initialize_sys(dataset = "mnist", worker_num = 10):
 
 if __name__ == '__main__':
     DATASET = "mnist"
-    initialize_sys(DATASET)
+    initialize_sys(DATASET, worker_num = ARGS.n, eta_d = ARGS.eta_d)
     
             
         

@@ -145,7 +145,14 @@ class Worker:
         return self.grad
 
     def central_receive(self, theta):
-        self.param = theta
+        # self.param = theta
+        # central receive should replace the non-vanishing parameters, while preserve the original parameter with a vanishing update
+        for i in range(len(self.param)):
+            self.param[i] = replace_non_vanish(self.param[i], theta[i])
+            
+            
+        
+        
 
 
     def evaluate(self, T):
