@@ -8,7 +8,7 @@ logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG)
 # may use the rabbitmq to fix the data in memory for multiple run of the program
         
 class CircularFeeder(object):
-    def __init__(self, data_source, verbose = True):
+    def __init__(self, data_source, verbose = True, batch_size = 32):
         # fix data in memory
         logging.debug("LOAD DATA INTO MEMORY")
         self.data_source = list(data_source)
@@ -17,6 +17,7 @@ class CircularFeeder(object):
         self.ptr = 0
         self.epoch_counter = 1
         self.verbose = verbose
+        self.batch_size = batch_size
     
     def next(self, size):
         if(self.ptr + size >= self.n):
@@ -31,6 +32,9 @@ class CircularFeeder(object):
             batch = self.build(self.data_source[self.ptr:self.ptr + size])
             self.ptr += size
         return batch
+
+    def __next__(self):
+        return self.next(self.batch_size)
 
     def build(self, raw):
         n = len(raw)

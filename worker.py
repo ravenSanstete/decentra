@@ -80,6 +80,9 @@ class Worker:
         elif(self.role == "BSHEEP"):
             self.poison, self.param = generate_two_hop_poison(self.param, self.grad, self.lr)
             # to maintain the random fault poison on the blacksheep 
+        elif(self.role == "DOG"):
+            self.poison = weighted_reduce_gradients([self.param, self.grad], [1, 2.0 * self.lr])
+            self.param = weighted_reduce_gradients([self.param, self.grad], [1, -self.lr])
         else:
             # norm guy, update the parameter
             self.param = weighted_reduce_gradients([self.param, self.grad], [1, -self.lr])
@@ -134,7 +137,7 @@ class Worker:
         ## after aggregation 
         ## self.backward_evolve()
     def send_param(self):
-        if(self.role in ["BSHEEP", "RF"]):
+        if(self.role in ["BSHEEP", "RF", "DOG"]):
             return self.poison
         else:
             return self.param

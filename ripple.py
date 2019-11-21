@@ -1,4 +1,6 @@
 ### implement the decentralized DL system
+## python ripple.py -c config_5_chain.txt --atk DOG --dataset mnist
+
 
 import argparse
 import os
@@ -190,7 +192,7 @@ def initialize_sys(dataset = "mnist", config_path = 'config.txt'):
     batch_size = 32
     logging.debug("Construct a Homogeneous DDL System {}".format(dataset))
     train_set, test_set = load_dataset(dataset)
-    train_loader = CircularFeeder(train_set, verbose = False)
+    train_loader = CircularFeeder(train_set, verbose = False, batch_size = batch_size)
     test_loader = torch.utils.data.DataLoader(test_set, batch_size = batch_size)
     criterion = F.cross_entropy
     model_pool = []

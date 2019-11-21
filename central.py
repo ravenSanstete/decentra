@@ -167,7 +167,7 @@ def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
 
 
 if __name__ == '__main__':
-    DATASET = "mnist"
+    DATASET = "cifar10"
     initialize_sys(DATASET, worker_num = ARGS.n, eta_d = ARGS.eta_d)
     
             
