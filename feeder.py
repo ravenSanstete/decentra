@@ -3,6 +3,7 @@
 import torch
 import random
 import logging
+import numpy as np
 
 logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG)
 # may use the rabbitmq to fix the data in memory for multiple run of the program
@@ -33,9 +34,23 @@ class CircularFeeder(object):
             self.ptr += size
         return batch
 
+    """
+    This function tampers a specified proportion of samples by label flipping
+    """
+    def next_with_noise(self, size, tamper_ratio = 0):
+        x, y = self.next(size)
+        tamper_num = int(tamper_ratio * size)
+        if(tamper_num == 0):
+            return x, y
+        # select the random id
+        rand_idx = np.random.choice(list(range(x.shape[0])), tamper_num, replace = True)
+        # label flipping
+        y[rand_idx] = 9 - y[rand_idx]
+        return x, y
+        
     def __next__(self):
         return self.next(self.batch_size)
-
+    
     def build(self, raw):
         n = len(raw)
         # print(raw[0][0].shape)

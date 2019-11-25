@@ -17,7 +17,7 @@ from pytorch_memlab import profile
 from torchvision import datasets, transforms
 import torch.utils.data as data_utils
 from itertools import cycle
-
+from tensorboardX import SummaryWriter
 
 
 from model import model_initializer
@@ -32,8 +32,11 @@ from worker import Worker
 
 logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG, filemode = 'w+')
 
-
 import argparse
+
+
+# writer = SummaryWriter()
+
 
 
 parser = argparse.ArgumentParser(description='Fairness')
@@ -53,7 +56,7 @@ logging = logger
 
 
 class Central:
-    def __init__(self, workers, model, test_loader, eta_d = 1.0, eta_r = 1.0):
+    def __init__(self, workers, model, test_loader, qv_loader, criterion, lr, eta_d = 1.0, eta_r = 1.0):
         self.workers = workers
         self.theta = get_parameter(model)
         self.cached_grads = []
@@ -65,8 +68,24 @@ class Central:
         self.eta_d = eta_d
         # the prop. of params for uploading
         self.eta_r = eta_r
- 
+        self.qv_loader = qv_loader
+        self.criterion = criterion
+        self.lr = lr
+        self.writer = SummaryWriter()
+
+    def _one_order_score(self, grad, lr):
+        # obtain the data in the qv_loader
+        x, y = next(self.qv_loader)
+        x, y = x.cuda(), y.cuda()
+        # then compute the previous loss
+        copy_from_param(self.model, self.theta)
+        prev_loss = self.criterion(self.model(x), y).data
+        temp_theta = weighted_reduce_gradients([self.theta, grad], [1, -lr])
+        copy_from_param(self.model, temp_theta)
+        cur_loss = self.criterion(self.model(x), y).data
+        return prev_loss - cur_loss
         
+          
     def _local_iter(self):
         for w in self.workers:
             w.local_iter()
@@ -78,9 +97,36 @@ class Central:
                 grad, idx = mechanism(grad)
                 self.update_counter[idx] += 1
             self.cached_grads.append(grad)
-    
-    def _aggregate(self):
-        self.grad = reduce_gradients(self.cached_grads)
+
+    def _assign_credit(self, i):
+        worker_contrib = []
+        for idx, grad in enumerate(self.cached_grads):
+            score = self._one_order_score(grad, self.lr)
+            worker_contrib.append(score.data)
+        self.writer.add_scalars('data/contrib', {'worker_{}'.format(j): worker_contrib[j] for j in range(len(self.cached_grads))}, i)
+        # the workers' contribution
+        return worker_contrib
+            # logging.info("Worker {} Contrib. {}".format(idx, score))
+
+    ## the problem of zeno: only assign the most credulous worker with the 1.0 weight
+    def _zeno(self, contrib):
+        weights = np.zeros((len(contrib),))
+        max_idx = np.argmax(contrib)
+        weights[max_idx] = 1.0
+        return weights
+        
+        
+    def _aggregate(self, i, mode = 'zeno'):
+        # using the fairness mechanism
+        if(mode == 'zeno'):
+            worker_contrib = self._assign_credit(i)
+            # now I have the worker contribution
+            weights = self._zeno(worker_contrib)
+            # logging.info(worker_contrib)
+            # logging.info(weights)
+            self.grad = weighted_reduce_gradients(self.cached_grads, weights)
+        else:
+            self.grad = reduce_gradients(self.cached_grads)
         self.cached_grads.clear()
 
     def _update(self, lr):
@@ -88,29 +134,41 @@ class Central:
 
     def _distribute(self):
         for w in self.workers:
-            w.central_receive(self.theta)
+            w.central_receive(self.theta, replace = True)
 
-    def _selective_distribute(self, ratio_d):
+    def _selective_distribute(self, ratio_d, replace):
         for w in self.workers:
-            w.central_receive(share_frequent_p_param(self.theta, self.update_counter, ratio = ratio_d))
+            w.central_receive(share_frequent_p_param(self.theta, self.update_counter, ratio = ratio_d), replace)
             # print(selected[-1])
 
             
-    def one_round(self, lr = 0.01):
+    def one_round(self, T):
         # self._distribute()
         self._distribute()
         self._local_iter()
         self._receive()
         self._aggregate()
-        self._update(lr)
+        self._update(self.lr)
 
-    def selective_gradient_sharing(self, lr = 0.01):
+
+    # @param i: the current iteration id
+    def selective_gradient_sharing(self, i):
         sharing_mec = partial(share_largest_p_param, ratio = self.eta_r)
-        self._selective_distribute(ratio_d = self.eta_d)
         self._local_iter()
         self._receive(sharing_mec)
-        self._aggregate()
-        self._update(lr)
+        self._aggregate(i)
+        self._update(self.lr)
+        self._selective_distribute(ratio_d = self.eta_d, replace = True)
+
+
+        
+    def heartbeat(self, T):
+        worker_acc = []
+        for idx, w in enumerate(self.workers):
+            acc = w.evaluate(T)
+            worker_acc.append(acc)
+        data = {'worker_{}'.format(i): worker_acc[i] for i in range(len(self.workers))}
+        self.writer.add_scalars("data/acc", data, T)
         
         
     def evaluate(self):
@@ -120,12 +178,16 @@ class Central:
 
     def execute(self, max_round = 1000):
         PRINT_FREQ = 100
+        # first distribute the theta_0 to all workers
+        self._distribute()
         for i in range(max_round):
             # self.one_round()
-            self.selective_gradient_sharing()
+            self.selective_gradient_sharing(i)
             if(i % PRINT_FREQ == 0):
+                self.heartbeat(i)
                 acc = self.evaluate()
-                logging.debug("Round {} Accuracy {:.4f}".format(i, acc))
+                logging.debug("Round {} Global Accuracy {:.4f}".format(i, acc))
+                
 
 
 
@@ -142,13 +204,24 @@ def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
     # initialize train loaders 
     train_loaders = []
     logging.debug("Initizalize training loaders")
+    ratios = np.arange(0, 1.0, 1.0/worker_num)
+    # print(ratios)
+
+    # for the central server to estimate the credibility
+    
+    qv_loader = data_utils.TensorDataset(*train_loader.next(batch_size))
+    qv_loader = data_utils.DataLoader(qv_loader, batch_size = batch_size)
+    qv_loader = cycle(list(qv_loader))
+    lr = 0.01
+    
+
     for i in range(worker_num):
-        x, y = train_loader.next(worker_data_size)
+        x, y = train_loader.next_with_noise(worker_data_size, tamper_ratio = ratios[i])
+        logging.info("Worker {} with {} ratio of data with flipped label".format(i, ratios[i]))
         ds = data_utils.TensorDataset(x, y)
         train_loaders.append(cycle(list(data_utils.DataLoader(ds, batch_size = batch_size, shuffle = True))))
     
         
-    
     test_loader = torch.utils.data.DataLoader(test_set, batch_size = batch_size)
     criterion = F.cross_entropy
     model = model_initializer(dataset)
@@ -156,9 +229,9 @@ def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
     workers = []
      
     for i in range(worker_num):
-        workers.append(Worker(i, train_loaders[i], model, criterion, test_loader, batch_size, role = True))
+        workers.append(Worker(i, train_loaders[i], model, criterion, test_loader, batch_size, role = True, lr = lr))
     
-    system = Central(workers, model, test_loader, eta_d = eta_d, eta_r = eta_r)
+    system = Central(workers, model, test_loader, qv_loader, criterion, lr, eta_d = eta_d, eta_r = eta_r)
     system.execute(max_round = 20000)
                 
                 

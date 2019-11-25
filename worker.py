@@ -146,11 +146,14 @@ class Worker:
     def send(self):
         return self.grad
 
-    def central_receive(self, theta):
+    def central_receive(self, theta, replace = False):
         # self.param = theta
         # central receive should replace the non-vanishing parameters, while preserve the original parameter with a vanishing update
-        for i in range(len(self.param)):
-            self.param[i] = replace_non_vanish(self.param[i], theta[i])
+        if(not replace):
+            for i in range(len(self.param)):
+                self.param[i] = replace_non_vanish(self.param[i], theta[i])
+        else:
+            self.param = theta
         
             
         
@@ -169,6 +172,7 @@ class Worker:
         acc = batch_accuracy_fn(self.model, self.test_loader)
         logging.debug("Round {} Worker {} Accuracy {:.4f} Loss {:.4f}".format(T, self.wid, acc, self.running_loss / span))
         self.running_loss = 0.0
+        return acc
         
         
         
