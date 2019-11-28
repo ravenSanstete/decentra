@@ -258,7 +258,13 @@ def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
     system = Central(workers, model, test_loader, qv_loader, criterion, lr, eta_d = eta_d, eta_r = eta_r, gamma = gamma)
     system.execute(max_round = 10000)
                 
-                
+
+
+def confidence_stat(probs_out):
+    probs_out = np.max(probs_out, axis = 1)
+    hist = np.histogram(probs_out, bins = 10)
+    return hist
+    
             
         
 

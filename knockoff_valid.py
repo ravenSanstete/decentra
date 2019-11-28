@@ -90,7 +90,10 @@ def transform_mnist_to_cifar(x):
     x = torch.repeat_interleave(x, 3, dim = 1)
     x = F.interpolate(x, size = (32, 32))
     return x
-    
+
+def transform_stl_to_cifar(x):
+    x = F.interpolate(x, size = (32, 32))
+    return x
     
     
 def generate_outputs(prv_model, test_loader):
@@ -100,7 +103,8 @@ def generate_outputs(prv_model, test_loader):
         for i, batch in enumerate(test_loader):
             x, y = batch
             x = x.cuda()
-            x = transform_mnist_to_cifar(x)
+            x = transform_stl_to_cifar(x)
+            # x = transform_mnist_to_cifar(x)
             f_x = prv_model(x)
             f_x = F.softmax(f_x, dim = 1)
             probs.append(f_x.detach().cpu().numpy())
@@ -110,12 +114,17 @@ def generate_outputs(prv_model, test_loader):
     return probs
         
         
-    
-    
+
+def confidence_stat(probs_out):
+    probs_out = np.max(probs_out, axis = 1)
+    hist = np.histogram(probs_out, bins = 10)
+    logging.info("Histogram {}".format(hist))
+    return hist 
     
     
 
 def knockoff(prv_ds = 'cifar10', pub_ds = 'mnist'):
+    logging.info("Using {} to Knockoff {}".format(pub_ds.upper(), prv_ds.upper()))
     prv_train_set, prv_test_set = load_dataset(prv_ds)
     pub_train_set, pub_test_set = load_dataset(pub_ds)
     batch_size = 64
@@ -143,19 +152,31 @@ def knockoff(prv_ds = 'cifar10', pub_ds = 'mnist'):
     probs_out = torch.FloatTensor(probs_out).cuda()
     # get th input
     pub_test_loader = list(pub_test_loader)
-    x = [transform_mnist_to_cifar(x) for x, _ in pub_test_loader]
+
+    if(pub_ds in ['mnist']):
+        x = [transform_mnist_to_cifar(x) for x, _ in pub_test_loader]
+    else:
+        x = [transform_stl_to_cifar(x) for x, _ in pub_test_loader]
     x = torch.cat(x, dim = 0)
     knockoff_ds = torch.utils.data.TensorDataset(x, probs_out)
     knockoff_train_loader = cycle(list(torch.utils.data.DataLoader(knockoff_ds, batch_size, shuffle = True)))
     knockoff_path = pattern.format(pub_ds, prv_ds)+".cpt"
     train_and_save_model(prv_ds, knockoff_train_loader, prv_test_loader, knockoff_path, criterion = LabelSmoothingLoss())
-
     
 
+    
+def analyze_confidence():
+    pattern  = "{}_knockoff_{}"
+    np_save_path = pattern.format("mnist", "cifar10-large")+".npy"
+    probs_out = np.load(np_save_path)
     # do knockoff
+    confidence_stat(probs_out)
+    
+    
     
         
     
 
 if __name__ == '__main__':
-    knockoff("cifar10-large", "mnist")
+    knockoff("cifar10-large", "stl10")
+    # analyze_confidence()
