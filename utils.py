@@ -272,6 +272,11 @@ def replace_non_vanish(original, current):
     
 
 
+def l2_norm(grad):
+    norms = torch.FloatTensor([x.norm() for x in grad]).cuda()
+    return norms.mean()
+    
+
 if __name__ == '__main__':
     # load_mnist_validation_set(100)
     load_cifar10_validation_set(1)

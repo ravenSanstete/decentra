@@ -54,9 +54,15 @@ fh.setLevel(logging.DEBUG)
 logger.addHandler(fh)
 logging = logger
 
+def write_group(writer, scalars, name, i):
+    writer.add_scalars('data/{}'.format(name), {'worker_{}'.format(j): scalars[j] for j in range(len(scalars))}, i)
+    return
+    
+
+
 
 class Central:
-    def __init__(self, workers, model, test_loader, qv_loader, criterion, lr, eta_d = 1.0, eta_r = 1.0):
+    def __init__(self, workers, model, test_loader, qv_loader, criterion, lr, eta_d = 1.0, eta_r = 1.0, gamma = 0.0005):
         self.workers = workers
         self.theta = get_parameter(model)
         self.cached_grads = []
@@ -72,6 +78,9 @@ class Central:
         self.criterion = criterion
         self.lr = lr
         self.writer = SummaryWriter()
+        # gamma is the gradient norm penalty
+        self.gamma = gamma
+        self.accumulated_selection = np.zeros((len(self.workers),))
 
     def _one_order_score(self, grad, lr):
         # obtain the data in the qv_loader
@@ -83,6 +92,7 @@ class Central:
         temp_theta = weighted_reduce_gradients([self.theta, grad], [1, -lr])
         copy_from_param(self.model, temp_theta)
         cur_loss = self.criterion(self.model(x), y).data
+        
         return prev_loss - cur_loss
         
           
@@ -98,16 +108,21 @@ class Central:
                 self.update_counter[idx] += 1
             self.cached_grads.append(grad)
 
-    def _assign_credit(self, i):
+    def _assign_credit(self, i, gamma = 0.0005):
         worker_contrib = []
         for idx, grad in enumerate(self.cached_grads):
             score = self._one_order_score(grad, self.lr)
-            worker_contrib.append(score.data)
-        self.writer.add_scalars('data/contrib', {'worker_{}'.format(j): worker_contrib[j] for j in range(len(self.cached_grads))}, i)
+            # add the penalty on gradient norm
+            score -= gamma * l2_norm(grad)
+            worker_contrib.append(score.cpu().data)
+
+        write_group(self.writer, worker_contrib, 'contrib', i)
         # the workers' contribution
         return worker_contrib
             # logging.info("Worker {} Contrib. {}".format(idx, score))
 
+            
+        
     ## the problem of zeno: only assign the most credulous worker with the 1.0 weight
     def _zeno(self, contrib):
         weights = np.zeros((len(contrib),))
@@ -119,9 +134,11 @@ class Central:
     def _aggregate(self, i, mode = 'zeno'):
         # using the fairness mechanism
         if(mode == 'zeno'):
-            worker_contrib = self._assign_credit(i)
+            worker_contrib = self._assign_credit(i, gamma = self.gamma)
             # now I have the worker contribution
             weights = self._zeno(worker_contrib)
+            self.accumulated_selection += weights
+            write_group(self.writer, self.accumulated_selection, 'counter', i)
             # logging.info(worker_contrib)
             # logging.info(weights)
             self.grad = weighted_reduce_gradients(self.cached_grads, weights)
@@ -167,9 +184,8 @@ class Central:
         for idx, w in enumerate(self.workers):
             acc = w.evaluate(T)
             worker_acc.append(acc)
-        data = {'worker_{}'.format(i): worker_acc[i] for i in range(len(self.workers))}
-        self.writer.add_scalars("data/acc", data, T)
-        
+        write_group(self.writer, worker_acc, 'acc', T)
+
         
     def evaluate(self):
         copy_from_param(self.model, self.theta)
@@ -186,6 +202,7 @@ class Central:
             if(i % PRINT_FREQ == 0):
                 self.heartbeat(i)
                 acc = self.evaluate()
+                self.writer.add_scalar('data/global_acc', acc, i)
                 logging.debug("Round {} Global Accuracy {:.4f}".format(i, acc))
                 
 
@@ -195,26 +212,33 @@ class Central:
 
 def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
     batch_size = 32
+    gamma = 0
     logging.debug("Construct a Centralized DDL System {} Download Ratio: {:.4f} Upload Ratio {:.4f}".format(dataset, eta_d, eta_r))
     train_set, test_set = load_dataset(dataset)
     train_loader = CircularFeeder(train_set, verbose = False)
     #
     worker_data_size = 600
+    has_label_flipping = True
 
     # initialize train loaders 
     train_loaders = []
-    logging.debug("Initizalize training loaders")
-    ratios = np.arange(0, 1.0, 1.0/worker_num)
+    logging.debug("Initizalize training loaders {}".format("NORMAL" if not has_label_flipping else "NOISY"))
+    if(has_label_flipping):
+        ratios = np.arange(0, 1.0, 1.0/worker_num)
+    else:
+        ratios = np.array([0]*worker_num)
     # print(ratios)
 
     # for the central server to estimate the credibility
+    qv_batch_size = 4
     
-    qv_loader = data_utils.TensorDataset(*train_loader.next(batch_size))
-    qv_loader = data_utils.DataLoader(qv_loader, batch_size = batch_size)
+    
+    qv_loader = data_utils.TensorDataset(*train_loader.next(qv_batch_size))
+    qv_loader = data_utils.DataLoader(qv_loader, batch_size = qv_batch_size)
     qv_loader = cycle(list(qv_loader))
-    lr = 0.01
-    
+    lr = 0.1
 
+    
     for i in range(worker_num):
         x, y = train_loader.next_with_noise(worker_data_size, tamper_ratio = ratios[i])
         logging.info("Worker {} with {} ratio of data with flipped label".format(i, ratios[i]))
@@ -231,8 +255,8 @@ def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
     for i in range(worker_num):
         workers.append(Worker(i, train_loaders[i], model, criterion, test_loader, batch_size, role = True, lr = lr))
     
-    system = Central(workers, model, test_loader, qv_loader, criterion, lr, eta_d = eta_d, eta_r = eta_r)
-    system.execute(max_round = 20000)
+    system = Central(workers, model, test_loader, qv_loader, criterion, lr, eta_d = eta_d, eta_r = eta_r, gamma = gamma)
+    system.execute(max_round = 10000)
                 
                 
             
