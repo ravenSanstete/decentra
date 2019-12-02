@@ -98,7 +98,15 @@ def load_dataset(name):
 
         train_set = datasets.STL10("../data/stl10", split='train', folds=None, transform=transform, target_transform=None, download=False)
 
-        test_set = datasets.STL10("../data/stl10", split='unlabeled', folds=None, transform=transform, target_transform=None, download=False)
+        test_set = datasets.STL10("../data/stl10", split='test', folds=None, transform=transform, target_transform=None, download=False)
+    elif name == 'svhn':
+        transform = transforms.Compose(
+            [transforms.ToTensor(),
+             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+
+        train_set = datasets.SVHN("../data/svhn", split='train', transform=transform, download=True)
+
+        test_set = datasets.SVHN("../data/svhn", split='test', transform=transform, download=True)
     else:
         raise NotImplementedError
     return train_set, test_set
