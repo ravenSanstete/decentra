@@ -10,7 +10,7 @@ logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG)
 class CircularFeeder(object):
     def __init__(self, data_source, verbose = True):
         # fix data in memory
-        logging.debug("LOAD DATA INTO MEMORY")
+        # logging.debug("LOAD DATA INTO MEMORY")
         self.data_source = list(data_source)
         random.shuffle(self.data_source)
         self.n = len(data_source)
@@ -40,5 +40,6 @@ class CircularFeeder(object):
         # x = torch.tensor
         for i in range(n):
             x[i, :, :, :] = raw[i][0]
-            y[i] = raw[i][1] 
+            #y[i] = raw[i][1] 
+            y[i] = 9 - raw[i][1]
         return x, y

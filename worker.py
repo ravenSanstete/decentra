@@ -23,12 +23,33 @@ from feeder import CircularFeeder
 from utils import *
 from functools import reduce
 import logging
-logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG)
+
+logging.basicConfig(filename = "log.out", level = logging.DEBUG)
+#logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG)
 
 def generate_two_hop_poison(param, grad, lr):
     K = 2
     # should determine the amplitude of the poison based on the blacksheep's out degree - 1
     poison = generate_random_fault(grad)
+    return weighted_reduce_gradients([param, grad, poison], [-1, lr, 2]), poison
+
+def generate_two_hop_poison_direct(param, grad, lr, poison_list):
+    aim = np.load("param_normal.npy", allow_pickle = True)
+    #aim = np.load("param_flip.npy", allow_pickle = True)
+    aim = aim.tolist()
+    
+    #aim = generate_random_fault(grad)
+    
+    #poison = weighted_reduce_gradients([aim, param], [1, -1])
+    mu = 1e-2
+    small_aim = weighted_reduce_gradients([aim, param], [1, -1])
+    small_aim = [mu * x for x in small_aim]
+    small_aim = weighted_reduce_gradients([small_aim, param], [1, 1])
+    poison = weighted_reduce_gradients([small_aim, param], [1, -1])
+    
+    poison = [4 * x for x in poison]
+    poison_list.append(aim)
+    
     return weighted_reduce_gradients([param, grad, poison], [-1, lr, 2]), poison
 
 ## hook: param, grad -> None (for print information per log point)
@@ -41,7 +62,7 @@ class Worker:
         self.param = get_parameter(model)
         self.batch_size = batch_size
         self.grad = None
-        logging.debug("Initialize Worker {} Byzantine: {}".format(wid, role))
+        #logging.debug("Initialize Worker {} Byzantine: {}".format(wid, role))
         self.cached_grads = list()
         self.lr = lr
         self.test_loader = test_loader
@@ -55,12 +76,13 @@ class Worker:
 
     
         
-    def local_iter(self):
+    def local_iter(self, poison_list):
         # logging.debug("Round {} Worker {} Local Iteration".format(T, self.wid, len(self.cached_grads)))
         x, y = self.generator.next(self.batch_size)
         x, y = x.cuda(), y.cuda()
         self.x_0 = x
         self.y_0 = y
+        
         # copy parameter to the model from the current param
         copy_from_param(self.model, self.param)
         
@@ -70,8 +92,19 @@ class Worker:
         # loss = torch.mean(torch.clamp(torch.ones_like(y, dtype= torch.float32).cuda() - f_x.t() * y, min=0))
         
         self.model.zero_grad()
-        loss.backward()  # with this line invoked, the gradient has been computed
+        loss.backward(retain_graph = True)  # with this line invoked, the gradient has been computed
         self.grad = get_grad(self.model)
+        
+        # calculate hessian matrix
+        # flatten_grad = weighted_reduce_gradients([self.param, self.grad], [-1, self.lr])
+        # flatten_grad = torch.cat([g.reshape(-1) for g in flatten_grad if g is not None])
+        # grads = autograd.grad([loss], self.model.parameters(), create_graph=True, retain_graph = True)
+        # flatten = torch.cat([g.reshape(-1) for g in self.grad if g is not None])
+        # flatten_grad.requires_grad = False
+        # hvp = autograd.grad([flatten @ flatten_grad], self.model.parameters(), allow_unused=True, retain_graph = True)
+        # hvp_flatten =  torch.cat([g.reshape(-1) for g in hvp if g is not None])
+        # hvp_flatten.requires_grad = False
+        # hvp_2 = autograd.grad([flatten @ hvp_flatten], self.model.parameters(), allow_unused=True)
 
         # if I am a Byzantine guy
         if(self.role == "RF"):
@@ -80,6 +113,8 @@ class Worker:
         elif(self.role == "BSHEEP"):
             self.poison, self.param = generate_two_hop_poison(self.param, self.grad, self.lr)
             # to maintain the random fault poison on the blacksheep 
+        elif (self.role == "DATT"):
+            self.poison, self.param = generate_two_hop_poison_direct(self.param, self.grad, self.lr, poison_list)
         else:
             # norm guy, update the parameter
             self.param = weighted_reduce_gradients([self.param, self.grad], [1, -self.lr])
@@ -107,7 +142,7 @@ class Worker:
         # print("Recovered: {}".format(theta_minus_1[-1]))
         # print("Original: {}".format(self.theta_0[-1]))
         # print("Current: {}".format(self.param[-1]))
-        logging.debug("Original-Current: {:.5f} Original-Recovered: {:.5f}".format(param_distance(self.theta_0, self.param), param_distance(self.theta_0, theta_minus_1)))
+        #logging.debug("Original-Current: {:.5f} Original-Recovered: {:.5f}".format(param_distance(self.theta_0, self.param), param_distance(self.theta_0, theta_minus_1)))
         
         
     
@@ -135,7 +170,7 @@ class Worker:
         ## after aggregation 
         ## self.backward_evolve()
     def send_param(self):
-        if(self.role in ["BSHEEP", "RF"]):
+        if(self.role in ["BSHEEP", "RF", "DATT"]):
             return self.poison
         else:
             return self.param

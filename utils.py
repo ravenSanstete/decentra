@@ -242,7 +242,7 @@ def batch_accuracy_fn(model, data_loader):
     model.eval()
     with torch.no_grad():
         for data in data_loader:
-            images, labels = data
+            images, labels = data            
             images = images.cuda()
             labels = labels.cuda()
             outputs = model(images)
@@ -253,12 +253,12 @@ def batch_accuracy_fn(model, data_loader):
     return correct / total
 
 
-def random_injection(v_i, sigma=2e-6): # 2e-6
-    return torch.randn_like(v_i) * sigma + torch.ones_like(v_i)* 0.0001
+def random_injection(v_i, sigma=2e-6, mu=1e-4): # 2e-6
+    return torch.randn_like(v_i) * sigma + torch.ones_like(v_i) * mu
 
 
-def generate_random_fault(grad):
-    return [random_injection(x).cuda() for x in grad]
+def generate_random_fault(grad, sigma=2e-6, mu=1e-4):
+    return [random_injection(x, sigma = sigma, mu = mu).cuda() for x in grad]
 
 def param_distance(paramA, paramB):
     loss = [F.mse_loss(xx, yy).cpu().detach().numpy() for xx, yy in zip(paramA, paramB)]

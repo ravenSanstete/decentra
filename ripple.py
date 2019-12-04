@@ -19,7 +19,7 @@ from torchvision import datasets, transforms
 
 from model import model_initializer
 from feeder import CircularFeeder
-from utils import load_dataset
+from utils import load_dataset, param_distance
 
 import networkx as nx
 import logging
@@ -32,12 +32,14 @@ from concurrent.futures import ThreadPoolExecutor
 import concurrent.futures as futures
 import threading
 
+
 parser = argparse.ArgumentParser(description='Ripple Attack')
-parser.add_argument("-c", type=str, default='config_toy.txt', help = "path that contains the configuration of the system topology")
+parser.add_argument("--config", "-c", type=str, default='config_toy.txt', help = "path that contains the configuration of the system topology")
 parser.add_argument("--dataset", type=str, default = "mnist", help = 'the dataset we use for testing')
 parser.add_argument("-b", action="store_true", help = "whether the system topo is bidirectional or not")
 parser.add_argument("--atk", type=str, default="NORMAL", help="the role of worker 0, the only adversary in the system")
 parser.add_argument("-n", type=int, default = 1, help = "the physical worker num")
+parser.add_argument("--round", type=int, default = 3003, help = "the total training round")
 ARGS = parser.parse_args()
 
 
@@ -45,13 +47,17 @@ ARGS = parser.parse_args()
 
 
 SEED = 8657
-logging.debug("Random SEED: {}".format(SEED))
+#logging.debug("Random SEED: {}".format(SEED))
 torch.manual_seed(SEED)
 np.random.seed(SEED)
 
 
-logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG)
+#logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG)
 
+
+# Poison eps begin
+poison_list = []
+# Poison eps end
 
 # P = np.array([[1/3, 1/3, 1/3, 0],
 #               [0, 1/3, 1/3, 1/3],
@@ -64,7 +70,7 @@ def local_iteration(worker, model_pool):
     # logging.info("thread id: {} name: {}".format(threading.get_ident(),threading.current_thread().getName()))
     thread_idx = int(threading.current_thread().getName().split('-')[-1])-1
     worker.model = model_pool[thread_idx]
-    worker.local_iter()
+    worker.local_iter(poison_list)
     return True
 
 def heartbeat(worker, model_pool, T):
@@ -77,9 +83,9 @@ def heartbeat(worker, model_pool, T):
 class Ripple:
     def __init__(self, config_path, model_pool, workers = None, directed = False, n = 4):
         # load the system topology
-        logging.debug("Load Sys. Topo.")
+        #logging.debug("Load Sys. Topo.")
         self.construct_system_topo(config_path, directed)
-        logging.debug("Associate Workers with the Sys. Topo")
+        #logging.debug("Associate Workers with the Sys. Topo")
         self.worker_map = {i : workers[i] for i in range(self.N)}
         self.directed = directed
         self.thread_pool = ThreadPoolExecutor(max_workers=n)
@@ -135,12 +141,12 @@ class Ripple:
     # describe the statc topology of the distributed system    
     def topo_describe(self):
         # logging.debug("Worker Map {}".format(self.worker_map))
-        logging.debug("Existing Channels (Bi={}) {}".format(not self.directed, list(self.G.edges)))
+        # logging.debug("Existing Channels (Bi={}) {}".format(not self.directed, list(self.G.edges)))
         for idx, nbrs in self.G.adj.items():
             info = "Worker {}'s Neighbor:".format(idx)
             for nbr, _ in nbrs.items():
                 info += str(nbr)+", "
-            logging.info(info)
+            #logging.info(info)
         
 
     def heartbeat(self, T):
@@ -173,22 +179,34 @@ class Ripple:
             #     print(self.worker_map[1].param[-1])
                 
             self.one_round(i)
+            
+            # print MSE of params
+            if i >= 2 and ARGS.atk == "DATT":
+                aim_param = self.worker_map[2].param
+                poison = poison_list[i - 2]
+                print("step {}: epsilon = {}".format(i, param_distance(poison, aim_param)))
+        
             # if(i == 1):
             # print(self.worker_map[1].param)
             if(i % PRINT_FREQ == 0):
                 self.heartbeat(T = i)
                 # logging.info("Backward Inference")
-                logging.debug("Worker 1: {}".format(self.worker_map[1].param[-1]))
-                logging.debug("Worker 2: {}".format(self.worker_map[2].param[-1]))
-                logging.debug("Worker 0: {}".format(self.worker_map[0].param[-1]))
+                # for j in range(3):
+                #    logging.debug("Worker {}: {}".format(j, self.worker_map[j].param[-1]))
                 # print(self.worker_map[1].param[-1])
                 # self.worker_map[IDX].backward_evolve(self.collect_params(), P_inv)
-        
-                    
+            
+        # save param
+        """
+        param = self.worker_map[2].param
+        param = np.array(param)
+        np.save("param_flip.npy", param)
+        """
+           
 # construct a homo  
-def initialize_sys(dataset = "mnist", config_path = 'config.txt'):
+def initialize_sys(dataset = "mnist", config_path = "config.txt"):
     batch_size = 32
-    logging.debug("Construct a Homogeneous DDL System {}".format(dataset))
+    #logging.debug("Construct a Homogeneous DDL System {}".format(dataset))
     train_set, test_set = load_dataset(dataset)
     train_loader = CircularFeeder(train_set, verbose = False)
     test_loader = torch.utils.data.DataLoader(test_set, batch_size = batch_size)
@@ -199,13 +217,9 @@ def initialize_sys(dataset = "mnist", config_path = 'config.txt'):
         model.cuda()
         model_pool.append(model)
 
-    print(model_pool)
+    #print(model_pool)
     workers = []
-    # config_path = "config_3.txt"
     worker_num = int(list(open(config_path, 'r'))[0][:-1])
-    # roles = ["RF", "NORMAL", "NORMAL", "NORMAL", "NORMAL"]
-    # roles = ["NORMAL", "NORMAL", "NORMAL", "NORMAL", "NORMAL"]
-    # roles = ["RF", "NORMAL", "NORMAL", "NORMAL", "NORMAL"]
     roles = ["NORMAL"]*worker_num
     roles[0] = ARGS.atk
     for i in range(worker_num):
@@ -213,21 +227,11 @@ def initialize_sys(dataset = "mnist", config_path = 'config.txt'):
     
     system = Ripple(config_path, model_pool, workers, directed = not ARGS.b, n=ARGS.n)
     system.topo_describe()
-    system.execute(max_round = 10000)
-
-    
-    
-    
-    
-    
-    
-    
+    system.execute(max_round = ARGS.round)
     
 
 if __name__ == '__main__':
-    initialize_sys(dataset = ARGS.dataset, config_path = ARGS.c)
-
+    initialize_sys(dataset = ARGS.dataset, config_path = ARGS.config)
     
-        
-        
+    
     
