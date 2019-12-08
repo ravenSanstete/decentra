@@ -13,6 +13,52 @@ import csv
 from torchvision import datasets, transforms
 import random
 
+# Transforms
+modelfamily_to_transforms = {
+    'mnist': {
+        'train': transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.1307,), (0.3081,))
+        ]),
+        'test': transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.1307,), (0.3081,))
+        ]),
+    },
+
+    'cifar': {
+        'train': transforms.Compose([
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=(0.4914, 0.4822, 0.4465),
+                                 std=(0.2023, 0.1994, 0.2010)),
+        ]),
+        'test': transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean=(0.4914, 0.4822, 0.4465),
+                                 std=(0.2023, 0.1994, 0.2010)),
+        ])
+    },
+
+    'imagenet': {
+        'train': transforms.Compose([
+            transforms.RandomResizedCrop(224),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225]),
+        ]),
+        'test': transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225]),
+        ])
+    }
+}
+
 
 def load_validation_set(name, val_size = 1, binary = False):
     if(name == 'mnist'):
@@ -96,9 +142,9 @@ def load_dataset(name):
             [transforms.ToTensor(),
              transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
-        train_set = datasets.STL10("../data/stl10", split='train', folds=None, transform=transform, target_transform=None, download=False)
+        train_set = datasets.STL10("../data/stl10", split='train', folds=None, transform=transform, target_transform=None, download=True)
 
-        test_set = datasets.STL10("../data/stl10", split='test', folds=None, transform=transform, target_transform=None, download=False)
+        test_set = datasets.STL10("../data/stl10", split='test', folds=None, transform=transform, target_transform=None, download=True)
     elif name == 'svhn':
         transform = transforms.Compose(
             [transforms.ToTensor(),
@@ -107,6 +153,19 @@ def load_dataset(name):
         train_set = datasets.SVHN("../data/svhn", split='train', transform=transform, download=True)
 
         test_set = datasets.SVHN("../data/svhn", split='test', transform=transform, download=True)
+    elif name == 'caltech256':
+        DATA_PATH = "/home/mlsnrs/data/data/pxd/data/256_ObjectCategories/"
+        # transform = transforms.Compose(
+        
+        #     [transforms.RandomResizedCrop(224),
+        #      transforms.ToTensor(),
+        #      transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+        total_set = datasets.ImageFolder(DATA_PATH, modelfamily_to_transforms['imagenet']['train'])
+        n = len(total_set)
+        n_test = int(0.1 * n)
+        print("Test Num: {}".format(n_test))
+        train_set = torch.utils.data.Subset(total_set, range(n_test))
+        test_set = torch.utils.data.Subset(total_set, range(n_test, n))
     else:
         raise NotImplementedError
     return train_set, test_set
@@ -269,16 +328,24 @@ def batch_accuracy_fn(model, data_loader):
     return correct / total
 
 
-def random_injection(v_i, sigma=2e-6): # 2e-6
-    return torch.randn_like(v_i) * sigma + torch.ones_like(v_i)* 0.0001
+def random_injection(v_i, sigma=1e-2): # 2e-6
+    return torch.randn_like(v_i) * sigma
+
+def zero_grad(param):
+    return [torch.zeros_like(x) for x in param]
 
 
 def generate_random_fault(grad):
     return [random_injection(x).cuda() for x in grad]
 
+
+
 def param_distance(paramA, paramB):
     loss = [F.mse_loss(xx, yy).cpu().detach().numpy() for xx, yy in zip(paramA, paramB)]
     return np.mean(loss)
+
+
+
 
 def replace_non_vanish(original, current):
     # generate mask from current

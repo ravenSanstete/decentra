@@ -21,6 +21,7 @@ from tensorboardX import SummaryWriter
 import scipy
 
 
+
 from model import model_initializer
 from feeder import CircularFeeder
 from utils import *
@@ -63,8 +64,8 @@ def write_group(writer, scalars, name, i):
 
 
 
-class Central:
-    def __init__(self, workers, model, test_loader, qv_loader, criterion, lr, eta_d = 1.0, eta_r = 1.0, gamma = 0.0005):
+class CentralRouter:
+    def __init__(self, workers, model, test_loader, qv_loader, criterion, lr, max_deg = 3, gamma = 0.1, send_grad = True):
         self.workers = workers
         self.theta = get_parameter(model)
         self.cached_grads = []
@@ -72,110 +73,84 @@ class Central:
         self.model = model
         self.test_loader = test_loader
         self.update_counter = torch.cat([torch.zeros_like(p.flatten()) for p in self.theta])
-        # the prop. of params for downloading
-        self.eta_d = eta_d
-        # the prop. of params for uploading
-        self.eta_r = eta_r
         self.qv_loader = qv_loader
         self.criterion = criterion
         self.lr = lr
         self.writer = SummaryWriter()
-        # gamma is the gradient norm penalty
+        # gamma is the temperature
         self.gamma = gamma
-        self.accumulated_selection = np.zeros((len(self.workers),))
-
-        # the downloadable parameter per worker
-        self.eta_d_vectors = [self.eta_d]*len(self.workers)
-        # the distribution mechanism
-        self.credit_ratio_map = np.array(list(np.arange(0, 1, 1/len(self.workers))[1:]) + [1.0])
-        logging.info("Credit Ratio Map:{}".format(self.credit_ratio_map))
+        self.max_deg = max_deg
+        self.G = None
+        self.worker_map = {i : workers[i] for i in range(len(workers))}
+        self.worker_tomo_counter = {i: np.zeros((len(workers),)) for i in range(len(workers))}
+        self.send_grad = send_grad
         
 
-    def _one_order_score(self, grad, lr):
-        # obtain the data in the qv_loader
-        x, y = next(self.qv_loader)
-        x, y = x.cuda(), y.cuda()
-        # then compute the previous loss
-        copy_from_param(self.model, self.theta)
-        prev_loss = self.criterion(self.model(x), y).data
-        temp_theta = weighted_reduce_gradients([self.theta, grad], [1, -lr])
-        copy_from_param(self.model, temp_theta)
-        cur_loss = self.criterion(self.model(x), y).data
-        # return back
-        copy_from_param(self.model, self.theta)
         
-        return prev_loss - cur_loss
+    def routing_table(self):
+        # to calculate the gradient distance (or geomed)
+        n = len(self.workers)
+        table = np.zeros((n, n))
+        for i in range(0, n):
+            for j in range(i, n):
+                table[i][j] = param_distance(self.cached_grads[i], self.cached_grads[j])
+                table[j][i] = table[i][j]
+        
+        table = F.softmax(-torch.tensor(table/self.gamma), dim = 1)
+        # table = -torch.tensor(table)
+        for i in range(0, n):
+            table[i][i] = 0
+        return table
 
-    def krum_score(self):
-        # to calculate the krum score (or geomed)
-        pass
-        
-        
-          
+    def gen_topology(self, route_table):
+        self.G = nx.DiGraph()
+        n = len(self.workers)
+        self.G.add_nodes_from(list(range(n)))
+        # create channels
+        route_table = route_table.numpy()
+        desired_table = dict()
+        for i in range(n):
+            desired_table[i] = np.argsort(-route_table[i, :])[:self.max_deg].tolist()
+        # handshake
+        for i in range(n):
+            for j in desired_table[i]:
+                if(i in desired_table[j]):
+                    self.G.add_edge(i, j)
+        # for i in range(n):
+        #     honest_nbrs = np.argsort(-route_table[i, :])[:self.max_deg]
+        #     self.G.add_edges_from([(i, j) for j in honest_nbrs])
+    
     def _local_iter(self):
         for w in self.workers:
             w.local_iter()
 
     def _receive(self, mechanism = None):
         for w in self.workers:
-            grad = w.send()
-            if(mechanism):
-                grad, idx = mechanism(grad)
-                self.update_counter[idx] += 1
+            grad = w.send_param()
             self.cached_grads.append(grad)
-
-    def _assign_credit(self, i, gamma = 0.0):
-        worker_contrib = []
-        for idx, grad in enumerate(self.cached_grads):
-            score = self._one_order_score(grad, self.lr)
-            # add the penalty on gradient norm
-            score -= gamma * l2_norm(grad)
-            worker_contrib.append(score.cpu().data)
-
-        write_group(self.writer, worker_contrib, 'contrib', i)
-        # the workers' contribution
-        return worker_contrib
-            # logging.info("Worker {} Contrib. {}".format(idx, score))
-
+        
+    def _aggregate(self, i=0, mode = 'none'):
+        table = self.routing_table()
+        self.gen_topology(table)
+        if(i % 50 == 0):
+            logging.info("Credit Table: {}".format(table))
+            self.topo_describe(i)
             
-        
-    ## the problem of zeno: only assign the most credulous worker with the 1.0 weight
-    def _zeno(self, contrib):
-        weights = np.zeros((len(contrib),))
-        max_idx = np.argmax(contrib)
-        weights[max_idx] = 1.0
-        return weights
-
-    
-        
-        
-    def _aggregate(self, i, mode = 'none'):
-        worker_contrib = self._assign_credit(i, gamma = self.gamma)
-        self.accumulated_selection += np.array(worker_contrib)
-        period = 200
-        # using the fairness mechanism
-        if(mode == 'zeno'):
-            # now I have the worker contribution
-            weights = self._zeno(worker_contrib)
-            write_group(self.writer, self.accumulated_selection, 'counter', i)
-            # logging.info(worker_contrib)
-            # logging.info(weights)
-            self.grad = weighted_reduce_gradients(self.cached_grads, weights)
-        elif(mode == 'dfair' and i % period == period - 1):
-
-            # sort the worker_contrib
-            sorted_indices = np.argsort(worker_contrib, axis = 0).tolist()
-            self.prev_eta_d_vectors = list(self.eta_d_vectors)
-            self.eta_d_vectors = [self.credit_ratio_map[sorted_indices.index(idx)] for idx in range(len(self.workers))]
-            write_group(self.writer, self.eta_d_vectors, 'eta_d', i)
-            write_group(self.writer, self.accumulated_selection, 'accumul', i)
-            logging.info("Adjust the Credit and Eta Ratio from {} -> {}".format(self.prev_eta_d_vectors, self.eta_d_vectors))
-            self.grad = weighted_reduce_gradients(self.cached_grads, worker_contrib)
-        else:
-            write_group(self.writer, self.eta_d_vectors, 'eta_d', i)
-            write_group(self.writer, self.accumulated_selection, 'accumul', i)
-            self.grad = reduce_gradients(self.cached_grads)
+        for idx, nbrs in self.G.adj.items():
+            for nbr, _ in nbrs.items():
+                self.worker_tomo_counter[idx][nbr] += 1
+                if(self.send_grad):
+                    self.worker_map[idx].receive(self.worker_map[nbr].send())
+                else:
+                    self.worker_map[idx].receive(self.worker_map[nbr].send_param())
+        self.grad = reduce_gradients(self.cached_grads)
+        # routing 
         self.cached_grads.clear()
+        for idx in self.G.nodes:
+            if(self.send_grad):
+                self.worker_map[idx].aggregate_grad()
+            else:
+                self.worker_map[idx].aggregate()
 
     def _update(self, lr):
         self.theta = weighted_reduce_gradients([self.theta, self.grad], [1, -lr])
@@ -183,39 +158,43 @@ class Central:
     def _distribute(self):
         for w in self.workers:
             w.central_receive(self.theta, replace = True)
-
-    def _selective_distribute(self, ratio_d, replace):
-        for i, w in enumerate(self.workers):
-            w.central_receive(share_frequent_p_param(self.theta, self.update_counter, ratio = self.eta_d_vectors[i]), replace)
-            # print(selected[-1])
-
             
     def one_round(self, T):
         # self._distribute()
-        self._distribute()
         self._local_iter()
         self._receive()
-        self._aggregate()
+        self._aggregate(T)
         self._update(self.lr)
-
-
-    # @param i: the current iteration id
-    def selective_gradient_sharing(self, i):
-        sharing_mec = partial(share_largest_p_param, ratio = self.eta_r)
-        self._local_iter()
-        self._receive(sharing_mec)
-        self._aggregate(i)
-        self._update(self.lr)
-        self._selective_distribute(ratio_d = self.eta_d, replace = True)
-
+        # self._distribute()
+        
+    # describe the statc topology of the distributed system    
+    def topo_describe(self, i):
+        # logging.debug("Worker Map {}".format(self.worker_map))
+        logging.debug("Existing Channels {}".format(list(self.G.edges)))
+        for idx, nbrs in self.G.adj.items():
+            info = "Worker {}'s Neighbor:".format(idx)
+            for nbr, _ in nbrs.items():
+                info += str(nbr)+", "
+            logging.info(info)
 
         
+        for idx in range(len(self.workers)):
+            tomo_counter = self.worker_tomo_counter[idx]
+            if(tomo_counter.sum() > 0):
+                tomo_counter = tomo_counter/(tomo_counter.sum())
+            logging.info("Round {} Worker {}'s Tomo Count: {}".format(i, idx, tomo_counter.tolist()))
+
+
+
     def heartbeat(self, T):
         worker_acc = []
+        worker_loss = []
         for idx, w in enumerate(self.workers):
-            acc, _ = w.evaluate(T)
+            acc, loss = w.evaluate(T)
             worker_acc.append(acc)
+            worker_loss.append(loss)
         write_group(self.writer, worker_acc, 'acc', T)
+        write_group(self.writer, worker_loss, 'loss', T)
 
         
     def evaluate(self):
@@ -229,7 +208,11 @@ class Central:
         self._distribute()
         for i in range(max_round):
             # self.one_round()
-            self.selective_gradient_sharing(i)
+            if(i < 100):
+                self.max_deg = 0
+            else:
+                self.max_deg = 5
+            self.one_round(i)
             if(i % PRINT_FREQ == 0):
                 self.heartbeat(i)
                 acc = self.evaluate()
@@ -237,24 +220,43 @@ class Central:
                 logging.debug("Round {} Global Accuracy {:.4f}".format(i, acc))
                 
 
+    def standalone_eval(self):
+        accs = []
+        for idx, w in enumerate(self.workers):
+            best_acc = w.train_standalone()
+            accs.append(best_acc)
+        logging.info(accs)
+
+import random
+
 
 def random_sampler(batches):
     while True:
         yield random.choice(batches)
 
+    
 
 
 def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
     batch_size = 32
-    gamma = 0
-    logging.debug("Construct a Centralized DDL System {} Download Ratio: {:.4f} Upload Ratio {:.4f}".format(dataset, eta_d, eta_r))
+    gamma = 0.001
+    deg = 2
+    send_grad = True
+
+    ROLE = "NO_UPDATE" if send_grad else "UPDATE"
+
     train_set, test_set = load_dataset(dataset)
+    print(len(train_set))
     train_loader = CircularFeeder(train_set, verbose = False)
     #
     worker_data_size = 5000
-    has_label_flipping = True
+    has_label_flipping = False
     group_count = 3
+    add_free_rider = False
+    standalone = False
+    base_data_size = 1000
 
+    logging.debug("Construct a Centralized DDL System {} Download Ratio: {:.4f} Upload Ratio {:.4f} Deg {}".format(dataset, eta_d, eta_r, deg))
     # initialize train loaders 
     train_loaders = []
 
@@ -268,9 +270,12 @@ def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
         worker_data_sizes = [worker_data_size for i in range(worker_num)]
     else:
         ratios = np.array([0]*worker_num)
-        worker_data_sizes = [300 * i for i in range(1, worker_num+1)]
+        worker_data_sizes = [base_data_size * i for i in range(1, worker_num+1)]
     # print(ratios)
 
+    
+
+    
 
     # for the central server to estimate the credibility
     qv_batch_size = 64
@@ -284,7 +289,7 @@ def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
     
     for i in range(worker_num):
         x, y = train_loader.next_with_noise(worker_data_sizes[i], tamper_ratio = ratios[i])
-        logging.info("Worker {}  Data Size {} with {} ratio of data with flipped label".format(i, worker_data_sizes[i], ratios[i]))
+        logging.info("Worker {} Data Size {} with {} ratio of data with flipped label".format(i, worker_data_sizes[i], ratios[i]))
         ds = data_utils.TensorDataset(x, y)
         train_loaders.append(random_sampler(list(data_utils.DataLoader(ds, batch_size = batch_size, shuffle = True))))
     
@@ -296,10 +301,19 @@ def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
     workers = []
      
     for i in range(worker_num):
-        workers.append(Worker(i, train_loaders[i], model, criterion, test_loader, batch_size, role = True, lr = lr))
-    
-    system = Central(workers, model, test_loader, qv_loader, criterion, lr, eta_d = eta_d, eta_r = eta_r, gamma = gamma)
-    system.execute(max_round = 10000)
+        workers.append(Worker(i, train_loaders[i], model, criterion, test_loader, batch_size, role = ROLE, lr = lr))
+        if(add_free_rider and i == worker_num - 1):
+            workers[i].role = 'RF'
+            
+            
+
+
+        
+    system = CentralRouter(workers, model, test_loader, qv_loader, criterion, lr, max_deg = deg, gamma = gamma, send_grad = send_grad)
+    if(standalone):
+        system.standalone_eval()
+    else:
+        system.execute(max_round = 10000)
                 
 
 

@@ -53,8 +53,26 @@ class Worker:
         self.x_0 = None
         self.y_0 = None
 
-    
-        
+    def train_standalone(self, iteration = 10000):
+        self.running_loss = 0.0
+        best_acc = 0.0
+        PRINT_FREQ = 100
+        for i in range(iteration):
+            self.model.zero_grad()
+            copy_from_param(self.model, self.param)
+            x, y =  next(self.generator)
+            x, y = x.cuda(), y.cuda()
+            f_x = self.model(x)
+            loss = self.criterion(f_x, y)
+            loss.backward()
+            self.grad = get_grad(self.model)
+            self.param = weighted_reduce_gradients([self.param, self.grad], [1, -self.lr])
+            self.running_loss += loss.item()
+            if(i % PRINT_FREQ == 0):
+                acc,_ = self.evaluate(i)
+                best_acc = max(best_acc, acc)
+        return best_acc
+                
     def local_iter(self):
         # logging.debug("Round {} Worker {} Local Iteration".format(T, self.wid, len(self.cached_grads)))
         x, y = next(self.generator)
@@ -76,13 +94,17 @@ class Worker:
         # if I am a Byzantine guy
         if(self.role == "RF"):
             self.poison = generate_random_fault(self.grad)
-            self.param =  weighted_reduce_gradients([self.param, self.grad], [1, -self.lr])
+            self.grad = self.poison
+            # self.param =  weighted_reduce_gradients([self.param, self.grad], [1, -self.lr])
+            self.param = self.param            
         elif(self.role == "BSHEEP"):
             self.poison, self.param = generate_two_hop_poison(self.param, self.grad, self.lr)
             # to maintain the random fault poison on the blacksheep 
         elif(self.role == "DOG"):
             self.poison = weighted_reduce_gradients([self.param, self.grad], [1, 2.0 * self.lr])
             self.param = weighted_reduce_gradients([self.param, self.grad], [1, -self.lr])
+        elif(self.role == 'NO_UPDATE'):
+            pass
         else:
             # norm guy, update the parameter
             self.param = weighted_reduce_gradients([self.param, self.grad], [1, -self.lr])
@@ -132,6 +154,15 @@ class Worker:
         # self.param = [x - self.lr * y for x, y in zip(self.param, self.grad)]
         self.cached_grads.clear()
         self.local_clock += 1
+
+
+    def aggregate_grad(self):
+        self.cached_grads += [self.grad]
+        grad = reduce_gradients(self.cached_grads)
+        self.param = weighted_reduce_gradients([self.param, grad], [1, -self.lr])
+        self.cached_grads.clear()
+        self.local_clock += 1
+
         
 
         ## after aggregation 
@@ -171,8 +202,9 @@ class Worker:
         copy_from_param(self.model, self.param)
         acc = batch_accuracy_fn(self.model, self.test_loader)
         logging.debug("Round {} Worker {} Accuracy {:.4f} Loss {:.4f}".format(T, self.wid, acc, self.running_loss / span))
+        loss = self.running_loss
         self.running_loss = 0.0
-        return acc
+        return acc, loss
         
         
         

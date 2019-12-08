@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
 from models.resnet import ResNet18
+import torchvision.models as models
 
 class Model(nn.Module):
     def __init__(self):
@@ -79,6 +80,8 @@ def model_initializer(dataset, arch = 'resnet18'):
         return YelpModel()
     elif dataset == 'cifar10-large':
         return ResNet18()
+    elif dataset == 'caltech256':
+        return models.resnet18(pretrained = True)
 
 
 if __name__ == '__main__':
