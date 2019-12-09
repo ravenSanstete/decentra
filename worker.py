@@ -33,9 +33,14 @@ def generate_two_hop_poison(param, grad, lr):
     poison = generate_random_fault(grad)
     return weighted_reduce_gradients([param, grad, poison], [-1, lr, 2]), poison
 
-def generate_two_hop_poison_direct(param, grad, lr, poison_list):
-    aim = np.load("param_normal.npy", allow_pickle = True)
-    #aim = np.load("param_flip.npy", allow_pickle = True)
+def generate_two_hop_poison_direct(i, param, grad, lr, poison_list):
+    if(i <= 10):
+        logging.info("send trained parameter")
+        aim = np.load("param_normal.npy", allow_pickle = True)
+    else:
+        logging.info("send poison parameter")
+        aim = np.load("param_flip.npy", allow_pickle = True)
+    # aim = np.load("param_flip.npy", allow_pickle = True)
     aim = aim.tolist()
     
     #aim = generate_random_fault(grad)
@@ -48,9 +53,9 @@ def generate_two_hop_poison_direct(param, grad, lr, poison_list):
     poison = weighted_reduce_gradients([small_aim, param], [1, -1])
     
     poison = [4 * x for x in poison]
-    poison_list.append(aim)
+    poison_list.append(small_aim)
     
-    return weighted_reduce_gradients([param, grad, poison], [-1, lr, 2]), poison
+    return weighted_reduce_gradients([param, grad, poison], [-1, lr, 4]), poison
 
 ## hook: param, grad -> None (for print information per log point)
 class Worker:
@@ -76,7 +81,7 @@ class Worker:
 
     
         
-    def local_iter(self, poison_list):
+    def local_iter(self, poison_list, i = 0):
         # logging.debug("Round {} Worker {} Local Iteration".format(T, self.wid, len(self.cached_grads)))
         x, y = self.generator.next(self.batch_size)
         x, y = x.cuda(), y.cuda()
@@ -114,7 +119,7 @@ class Worker:
             self.poison, self.param = generate_two_hop_poison(self.param, self.grad, self.lr)
             # to maintain the random fault poison on the blacksheep 
         elif (self.role == "DATT"):
-            self.poison, self.param = generate_two_hop_poison_direct(self.param, self.grad, self.lr, poison_list)
+            self.poison, self.param = generate_two_hop_poison_direct(i, self.param, self.grad, self.lr, poison_list)
         else:
             # norm guy, update the parameter
             self.param = weighted_reduce_gradients([self.param, self.grad], [1, -self.lr])

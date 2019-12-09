@@ -66,11 +66,11 @@ poison_list = []
 # P_inv = np.linalg.inv(P)
 # logging.debug("Inverse Topology: {}".format(P_inv))
 
-def local_iteration(worker, model_pool):
+def local_iteration(worker, model_pool, i):
     # logging.info("thread id: {} name: {}".format(threading.get_ident(),threading.current_thread().getName()))
     thread_idx = int(threading.current_thread().getName().split('-')[-1])-1
     worker.model = model_pool[thread_idx]
-    worker.local_iter(poison_list)
+    worker.local_iter(poison_list, i)
     return True
 
 def heartbeat(worker, model_pool, T):
@@ -106,10 +106,10 @@ class Ripple:
                     self.G.add_edge(link[0], link[1])
 
                     
-    def _local_iter(self):
+    def _local_iter(self, i):
         tasks = []
         for idx in self.G.nodes:
-            future = self.thread_pool.submit(local_iteration, self.worker_map[idx], self.model_pool)
+            future = self.thread_pool.submit(local_iteration, self.worker_map[idx], self.model_pool, i)
             tasks.append(future)
         # print(tasks)
         for future in futures.as_completed(tasks):
@@ -131,7 +131,7 @@ class Ripple:
             self.worker_map[idx].aggregate()
             
     def one_round(self, T = 0):
-        self._local_iter()
+        self._local_iter(T)
         # a synchronization barrier
 
         
@@ -172,7 +172,7 @@ class Ripple:
         
     def execute(self, max_round = 10000):
         IDX = 1
-        PRINT_FREQ = 100
+        PRINT_FREQ = 1
         for i in range(max_round):
             # if(i in [0 ,1]):
 
@@ -181,9 +181,11 @@ class Ripple:
             self.one_round(i)
             
             # print MSE of params
-            if i >= 2 and ARGS.atk == "DATT":
+            if i >= 0 and ARGS.atk == "DATT":
                 aim_param = self.worker_map[2].param
-                poison = poison_list[i - 2]
+                poison = poison_list[i - 2 if i >=2 else 0]
+                print("poison: {}".format(poison[-1]))
+                print("ori. param: {}".format(aim_param[-1]))
                 print("step {}: epsilon = {}".format(i, param_distance(poison, aim_param)))
         
             # if(i == 1):
