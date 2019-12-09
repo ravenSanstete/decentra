@@ -37,29 +37,32 @@ def generate_two_hop_poison_direct(i, param, grad, lr, poison_list):
     if(i <= 10):
         logging.info("send trained parameter")
         aim = np.load("param_normal.npy", allow_pickle = True)
+        print(aim.shape)
     else:
+        flip17_path = "param_flip7to1.npy"
         logging.info("send poison parameter")
-        aim = np.load("param_flip.npy", allow_pickle = True)
+        aim = np.load(flip17_path, allow_pickle = True)
+        print(aim.shape)
     # aim = np.load("param_flip.npy", allow_pickle = True)
     aim = aim.tolist()
     
     #aim = generate_random_fault(grad)
     
     #poison = weighted_reduce_gradients([aim, param], [1, -1])
-    mu = 1e-2
+    mu = 0.1 ## hyper-param 1
     small_aim = weighted_reduce_gradients([aim, param], [1, -1])
     small_aim = [mu * x for x in small_aim]
     small_aim = weighted_reduce_gradients([small_aim, param], [1, 1])
     poison = weighted_reduce_gradients([small_aim, param], [1, -1])
     
-    poison = [4 * x for x in poison]
+    poison = [x for x in poison] 
     poison_list.append(small_aim)
     
     return weighted_reduce_gradients([param, grad, poison], [-1, lr, 4]), poison
 
 ## hook: param, grad -> None (for print information per log point)
 class Worker:
-    def __init__(self, wid, batch_generator, model, criterion, test_loader, batch_size = 32, lr = 0.01, role = True, hook = None):
+    def __init__(self, wid, batch_generator, model, criterion, test_loader, batch_size = 32, lr = 0.01, role = True, hook = None, flipped = False):
         self.wid = wid
         self.generator = batch_generator
         self.model = model
@@ -78,12 +81,12 @@ class Worker:
         self.theta_0 = get_parameter(model)
         self.x_0 = None
         self.y_0 = None
-
+        self.flipped = flipped
     
         
     def local_iter(self, poison_list, i = 0):
         # logging.debug("Round {} Worker {} Local Iteration".format(T, self.wid, len(self.cached_grads)))
-        x, y = self.generator.next(self.batch_size)
+        x, y = self.generator.next(self.batch_size, self.flipped)
         x, y = x.cuda(), y.cuda()
         self.x_0 = x
         self.y_0 = y
@@ -195,11 +198,23 @@ class Worker:
         else:
             span = 1
         # copy parameter to the model from the current param
+        # load the parameter
+        # flip17_path = "/home/mlsnrs/data/data/xqf/Decentra/param_flip7to1.npy"
+        # logging.info("send poison parameter")
+        # aim = np.load(flip17_path, allow_pickle = True)
+        # aim = aim.tolist()
+        # self.param = aim
 
         copy_from_param(self.model, self.param)
         acc = batch_accuracy_fn(self.model, self.test_loader)
         logging.debug("Round {} Worker {} Accuracy {:.4f} Loss {:.4f}".format(T, self.wid, acc, self.running_loss / span))
         self.running_loss = 0.0
+        
+        # if(self.wid == 0 and T == 1000):
+        #     ## save the parameter
+        #     path = "param_flip7to1.npy"
+        #     np.save(path, self.param)
+        #     logging.info("save model (acc={:.4f})".format(acc))
         
         
         

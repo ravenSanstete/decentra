@@ -173,6 +173,10 @@ class Ripple:
     def execute(self, max_round = 10000):
         IDX = 1
         PRINT_FREQ = 1
+        # check the parameter of the flip17
+        
+
+        
         for i in range(max_round):
             # if(i in [0 ,1]):
 
@@ -208,6 +212,7 @@ class Ripple:
 # construct a homo  
 def initialize_sys(dataset = "mnist", config_path = "config.txt"):
     batch_size = 32
+    FLIP_17 = False
     #logging.debug("Construct a Homogeneous DDL System {}".format(dataset))
     train_set, test_set = load_dataset(dataset)
     train_loader = CircularFeeder(train_set, verbose = False)
@@ -225,7 +230,7 @@ def initialize_sys(dataset = "mnist", config_path = "config.txt"):
     roles = ["NORMAL"]*worker_num
     roles[0] = ARGS.atk
     for i in range(worker_num):
-        workers.append(Worker(i, train_loader, model_pool[0], criterion, test_loader, batch_size, role = roles[i]))
+        workers.append(Worker(i, train_loader, model_pool[0], criterion, test_loader, batch_size, role = roles[i], flipped = FLIP_17))
     
     system = Ripple(config_path, model_pool, workers, directed = not ARGS.b, n=ARGS.n)
     system.topo_describe()

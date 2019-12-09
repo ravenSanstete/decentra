@@ -18,7 +18,7 @@ class CircularFeeder(object):
         self.epoch_counter = 1
         self.verbose = verbose
     
-    def next(self, size):
+    def next(self, size, flipped = False):
         if(self.ptr + size >= self.n):
             batch = self.build(self.data_source[self.ptr:] + self.data_source[:(self.ptr + size - self.n)])
             self.ptr = self.ptr + size - self.n
@@ -30,6 +30,11 @@ class CircularFeeder(object):
         else:
             batch = self.build(self.data_source[self.ptr:self.ptr + size])
             self.ptr += size
+
+        if(flipped):
+            x, y = batch
+            y[y == 1] = 7
+            y[y == 7] = 1
         return batch
 
     def build(self, raw):
@@ -40,6 +45,6 @@ class CircularFeeder(object):
         # x = torch.tensor
         for i in range(n):
             x[i, :, :, :] = raw[i][0]
-            #y[i] = raw[i][1] 
-            y[i] = 9 - raw[i][1]
+            y[i] = raw[i][1] 
+            # y[i] = 9 - raw[i][1]
         return x, y
