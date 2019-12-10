@@ -65,7 +65,7 @@ def write_group(writer, scalars, name, i):
 
 
 class CentralRouter:
-    def __init__(self, workers, model, test_loader, qv_loader, criterion, lr, max_deg = 3, gamma = 0.1, send_grad = True):
+    def __init__(self, workers, model, test_loader, qv_loader, criterion, lr, max_deg = 3, gamma = 0.1, send_grad = True, deg_scheduler = None):
         self.workers = workers
         self.theta = get_parameter(model)
         self.cached_grads = []
@@ -84,6 +84,7 @@ class CentralRouter:
         self.worker_map = {i : workers[i] for i in range(len(workers))}
         self.worker_tomo_counter = {i: np.zeros((len(workers),)) for i in range(len(workers))}
         self.send_grad = send_grad
+        self.deg_scheduler = deg_scheduler
         
 
         
@@ -95,11 +96,12 @@ class CentralRouter:
             for j in range(i, n):
                 table[i][j] = param_distance(self.cached_grads[i], self.cached_grads[j])
                 table[j][i] = table[i][j]
-        
+
+        # table = -torch.tensor(table)
         table = F.softmax(-torch.tensor(table/self.gamma), dim = 1)
         # table = -torch.tensor(table)
         for i in range(0, n):
-            table[i][i] = 0
+            table[i][i] = 1.0
         return table
 
     def gen_topology(self, route_table):
@@ -132,7 +134,7 @@ class CentralRouter:
     def _aggregate(self, i=0, mode = 'none'):
         table = self.routing_table()
         self.gen_topology(table)
-        if(i % 50 == 0):
+        if(i % 100 == 0):
             logging.info("Credit Table: {}".format(table))
             self.topo_describe(i)
             
@@ -178,11 +180,11 @@ class CentralRouter:
             logging.info(info)
 
         
-        for idx in range(len(self.workers)):
-            tomo_counter = self.worker_tomo_counter[idx]
-            if(tomo_counter.sum() > 0):
-                tomo_counter = tomo_counter/(tomo_counter.sum())
-            logging.info("Round {} Worker {}'s Tomo Count: {}".format(i, idx, tomo_counter.tolist()))
+        # for idx in range(len(self.workers)):
+        #     tomo_counter = self.worker_tomo_counter[idx]
+        #     if(tomo_counter.sum() > 0):
+        #         tomo_counter = tomo_counter/(tomo_counter.sum())
+        #     logging.info("Round {} Worker {}'s Tomo Count: {}".format(i, idx, tomo_counter.tolist()))
 
 
 
@@ -208,16 +210,13 @@ class CentralRouter:
         self._distribute()
         for i in range(max_round):
             # self.one_round()
-            if(i < 100):
-                self.max_deg = 0
-            else:
-                self.max_deg = 5
+            self.max_deg = self.deg_scheduler(i)
             self.one_round(i)
             if(i % PRINT_FREQ == 0):
                 self.heartbeat(i)
                 acc = self.evaluate()
                 self.writer.add_scalar('data/global_acc', acc, i)
-                logging.debug("Round {} Global Accuracy {:.4f}".format(i, acc))
+                logging.debug("Max Deg. {} Round {} Global Accuracy {:.4f}".format(self.max_deg, i, acc))
                 
 
     def standalone_eval(self):
@@ -234,7 +233,11 @@ def random_sampler(batches):
     while True:
         yield random.choice(batches)
 
-    
+
+def init_degree_scheduler(n, max_iter):
+    def schedule(i):
+        return min(int(n * (2 * i / max_iter)), n)
+    return schedule
 
 
 def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
@@ -252,11 +255,15 @@ def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
     worker_data_size = 5000
     has_label_flipping = False
     group_count = 3
-    add_free_rider = False
+    add_free_rider = True
     standalone = False
-    base_data_size = 1000
+    base_data_size = 300
+    max_round_count = 10000
 
-    logging.debug("Construct a Centralized DDL System {} Download Ratio: {:.4f} Upload Ratio {:.4f} Deg {}".format(dataset, eta_d, eta_r, deg))
+
+    deg_scheduler = init_degree_scheduler(worker_num, max_round_count)
+
+    logging.debug("Construct a Centralized DDL System {} Download Ratio: {:.4f} Upload Ratio {:.4f}".format(dataset, eta_d, eta_r))
     # initialize train loaders 
     train_loaders = []
 
@@ -301,19 +308,22 @@ def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
     workers = []
      
     for i in range(worker_num):
-        workers.append(Worker(i, train_loaders[i], model, criterion, test_loader, batch_size, role = ROLE, lr = lr))
-        if(add_free_rider and i == worker_num - 1):
-            workers[i].role = 'RF'
-            
+        if(not add_free_rider):
+            role = ROLE
+        else:
+            role = "FREE_RIDER" if i == 0 else ROLE
+        workers.append(Worker(i, train_loaders[i], model, criterion, test_loader, batch_size, role = role, lr = lr))
+
+    
             
 
 
         
-    system = CentralRouter(workers, model, test_loader, qv_loader, criterion, lr, max_deg = deg, gamma = gamma, send_grad = send_grad)
+    system = CentralRouter(workers, model, test_loader, qv_loader, criterion, lr, max_deg = deg, gamma = gamma, send_grad = send_grad, deg_scheduler = deg_scheduler)
     if(standalone):
         system.standalone_eval()
     else:
-        system.execute(max_round = 10000)
+        system.execute(max_round = max_round_count)
                 
 
 

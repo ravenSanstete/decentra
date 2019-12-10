@@ -105,6 +105,9 @@ class Worker:
             self.param = weighted_reduce_gradients([self.param, self.grad], [1, -self.lr])
         elif(self.role == 'NO_UPDATE'):
             pass
+        elif(self.role == 'FREE_RIDER'):
+            self.grad = generate_random_fault(self.grad)
+            self.param = generate_random_fault(self.grad)
         else:
             # norm guy, update the parameter
             self.param = weighted_reduce_gradients([self.param, self.grad], [1, -self.lr])
