@@ -97,11 +97,13 @@ class CentralRouter:
                 table[i][j] = param_distance(self.cached_grads[i], self.cached_grads[j])
                 table[j][i] = table[i][j]
 
+        for i in range(0, n):
+            table[i][i] = np.min(table[i, :])
         # table = -torch.tensor(table)
         table = F.softmax(-torch.tensor(table/self.gamma), dim = 1)
         # table = -torch.tensor(table)
-        for i in range(0, n):
-            table[i][i] = 1.0
+        # for i in range(0, n):
+        #     table[i][i] = 1.0
         return table
 
     def gen_topology(self, route_table):
@@ -178,6 +180,12 @@ class CentralRouter:
             for nbr, _ in nbrs.items():
                 info += str(nbr)+", "
             logging.info(info)
+        A = nx.adjacency_matrix(self.G).todense()
+        for i in range(len(self.workers)):
+            val = []
+            for j in range(len(self.workers)):
+                val.append(str(int(A[i, j])))
+            print(','.join(val))
 
         
         # for idx in range(len(self.workers)):
@@ -236,7 +244,7 @@ def random_sampler(batches):
 
 def init_degree_scheduler(n, max_iter):
     def schedule(i):
-        return min(int(n * (2 * i / max_iter)), n)
+        return int(min(n * (5 * i / max_iter), n * 2 /3))
     return schedule
 
 
@@ -255,7 +263,7 @@ def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
     worker_data_size = 5000
     has_label_flipping = False
     group_count = 3
-    add_free_rider = True
+    add_free_rider = False
     standalone = False
     base_data_size = 300
     max_round_count = 10000
