@@ -31,6 +31,7 @@ from multiprocessing.pool import ThreadPool
 from concurrent.futures import ThreadPoolExecutor
 import concurrent.futures as futures
 import threading
+from queue import Queue
 
 
 parser = argparse.ArgumentParser(description='Ripple Attack')
@@ -39,7 +40,7 @@ parser.add_argument("--dataset", type=str, default = "mnist", help = 'the datase
 parser.add_argument("-b", action="store_true", help = "whether the system topo is bidirectional or not")
 parser.add_argument("--atk", type=str, default="NORMAL", help="the role of worker 0, the only adversary in the system")
 parser.add_argument("-n", type=int, default = 1, help = "the physical worker num")
-parser.add_argument("--round", type=int, default = 3003, help = "the total training round")
+parser.add_argument("--round", type=int, default = 10000, help = "the total training round")
 ARGS = parser.parse_args()
 
 
@@ -56,7 +57,7 @@ np.random.seed(SEED)
 
 
 # Poison eps begin
-poison_list = []
+poison_list = Queue(maxsize = 2)
 # Poison eps end
 
 # P = np.array([[1/3, 1/3, 1/3, 0],
@@ -70,7 +71,7 @@ def local_iteration(worker, model_pool, i):
     # logging.info("thread id: {} name: {}".format(threading.get_ident(),threading.current_thread().getName()))
     thread_idx = int(threading.current_thread().getName().split('-')[-1])-1
     worker.model = model_pool[thread_idx]
-    worker.local_iter(poison_list, i)
+   
     return True
 
 def heartbeat(worker, model_pool, T):
@@ -107,16 +108,9 @@ class Ripple:
 
                     
     def _local_iter(self, i):
-        tasks = []
         for idx in self.G.nodes:
-            future = self.thread_pool.submit(local_iteration, self.worker_map[idx], self.model_pool, i)
-            tasks.append(future)
-        # print(tasks)
-        for future in futures.as_completed(tasks):
-            res = future.result()
-            # print(res)
+            self. worker_map[idx].local_iter(poison_list, i)
         return
-            # self.worker_map[idx].local_iter()
 
 
 
@@ -147,9 +141,9 @@ class Ripple:
             for nbr, _ in nbrs.items():
                 info += str(nbr)+", "
             #logging.info(info)
-        
 
-    def heartbeat(self, T):
+
+    """
         tasks = []
         for idx in self.G.nodes:
             future = self.thread_pool.submit(heartbeat, self.worker_map[idx], self.model_pool, T)
@@ -159,7 +153,9 @@ class Ripple:
             res = future.result()
             # print(res)
         return
+    """
 
+    def heartbeat(self, T):
         for idx in self.G.nodes:
             self.worker_map[idx].evaluate(T)
 
@@ -185,11 +181,11 @@ class Ripple:
             self.one_round(i)
             
             # print MSE of params
-            if i >= 0 and ARGS.atk == "DATT":
+            if i >= 1 and ARGS.atk == "DATT":
                 aim_param = self.worker_map[2].param
-                poison = poison_list[i - 2 if i >=2 else 0]
+                poison = poison_list.get()
                 print("poison: {}".format(poison[-1]))
-                print("ori. param: {}".format(aim_param[-1]))
+                print("worker 2 ori. param: {}".format(aim_param[-1]))
                 print("step {}: epsilon = {}".format(i, param_distance(poison, aim_param)))
         
             # if(i == 1):
@@ -230,7 +226,7 @@ def initialize_sys(dataset = "mnist", config_path = "config.txt"):
     roles = ["NORMAL"]*worker_num
     roles[0] = ARGS.atk
     for i in range(worker_num):
-        workers.append(Worker(i, train_loader, model_pool[0], criterion, test_loader, batch_size, role = roles[i], flipped = FLIP_17))
+        workers.append(Worker(i, train_loader, model_pool[0], criterion, test_loader, batch_size, role = roles[i], flipped = FLIP_17, dataset = dataset))
     
     system = Ripple(config_path, model_pool, workers, directed = not ARGS.b, n=ARGS.n)
     system.topo_describe()

@@ -23,46 +23,14 @@ from feeder import CircularFeeder
 from utils import *
 from functools import reduce
 import logging
+from attack import generate_two_hop_poison, generate_two_hop_poison_direct, initialize_atk
+
 
 logging.basicConfig(filename = "log.out", level = logging.DEBUG)
 #logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG)
-
-def generate_two_hop_poison(param, grad, lr):
-    K = 2
-    # should determine the amplitude of the poison based on the blacksheep's out degree - 1
-    poison = generate_random_fault(grad)
-    return weighted_reduce_gradients([param, grad, poison], [-1, lr, 2]), poison
-
-def generate_two_hop_poison_direct(i, param, grad, lr, poison_list):
-    if(i <= 10):
-        logging.info("send trained parameter")
-        aim = np.load("param_normal.npy", allow_pickle = True)
-        print(aim.shape)
-    else:
-        flip17_path = "param_flip7to1.npy"
-        logging.info("send poison parameter")
-        aim = np.load(flip17_path, allow_pickle = True)
-        print(aim.shape)
-    # aim = np.load("param_flip.npy", allow_pickle = True)
-    aim = aim.tolist()
-    
-    #aim = generate_random_fault(grad)
-    
-    #poison = weighted_reduce_gradients([aim, param], [1, -1])
-    mu = 0.1 ## hyper-param 1
-    small_aim = weighted_reduce_gradients([aim, param], [1, -1])
-    small_aim = [mu * x for x in small_aim]
-    small_aim = weighted_reduce_gradients([small_aim, param], [1, 1])
-    poison = weighted_reduce_gradients([small_aim, param], [1, -1])
-    
-    poison = [x for x in poison] 
-    poison_list.append(small_aim)
-    
-    return weighted_reduce_gradients([param, grad, poison], [-1, lr, 4]), poison
-
 ## hook: param, grad -> None (for print information per log point)
 class Worker:
-    def __init__(self, wid, batch_generator, model, criterion, test_loader, batch_size = 32, lr = 0.01, role = True, hook = None, flipped = False):
+    def __init__(self, wid, batch_generator, model, criterion, test_loader, batch_size = 32, lr = 0.01, role = True, hook = None, flipped = False, dataset = "mnist"):
         self.wid = wid
         self.generator = batch_generator
         self.model = model
@@ -82,6 +50,7 @@ class Worker:
         self.x_0 = None
         self.y_0 = None
         self.flipped = flipped
+        self.dataset = dataset
     
         
     def local_iter(self, poison_list, i = 0):
@@ -122,7 +91,10 @@ class Worker:
             self.poison, self.param = generate_two_hop_poison(self.param, self.grad, self.lr)
             # to maintain the random fault poison on the blacksheep 
         elif (self.role == "DATT"):
-            self.poison, self.param = generate_two_hop_poison_direct(i, self.param, self.grad, self.lr, poison_list)
+            aim, reset_aim = (initialize_atk(self.dataset))(i)
+            self.poison, self.param = generate_two_hop_poison_direct(i, self.param, self.grad, self.lr, poison_list, aim, reset_aim)
+            
+            
         else:
             # norm guy, update the parameter
             self.param = weighted_reduce_gradients([self.param, self.grad], [1, -self.lr])
@@ -199,7 +171,7 @@ class Worker:
             span = 1
         # copy parameter to the model from the current param
         # load the parameter
-        # flip17_path = "/home/mlsnrs/data/data/xqf/Decentra/param_flip7to1.npy"
+        # flip17_path = "param_cifar10.npy"
         # logging.info("send poison parameter")
         # aim = np.load(flip17_path, allow_pickle = True)
         # aim = aim.tolist()
@@ -210,11 +182,11 @@ class Worker:
         logging.debug("Round {} Worker {} Accuracy {:.4f} Loss {:.4f}".format(T, self.wid, acc, self.running_loss / span))
         self.running_loss = 0.0
         
-        # if(self.wid == 0 and T == 1000):
-        #     ## save the parameter
-        #     path = "param_flip7to1.npy"
-        #     np.save(path, self.param)
-        #     logging.info("save model (acc={:.4f})".format(acc))
+        if(self.wid == 0 and T >=9900):
+            ## save the parameter
+            path = "param_cifar10_large.npy"
+            np.save(path, self.param)
+            logging.info("save model (acc={:.4f})".format(acc))
         
         
         
