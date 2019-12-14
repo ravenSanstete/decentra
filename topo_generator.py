@@ -9,8 +9,8 @@ from smallworld import get_smallworld_graph
 import matplotlib.pyplot as plt
 
 logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG)
-
-
+PREFIX = "config/"
+P = lambda x: PREFIX + x
 
 parser = argparse.ArgumentParser(description='topo. generator')
 parser.add_argument("--arg", type=int, default=3, help = "structural parameter of the specified topology")
@@ -18,7 +18,7 @@ parser.add_argument("--topo", type=str, default="chain", help = "name to specify
 ARGS = parser.parse_args()
 
 def generate_chain(num):
-    path = "topo_{}_chain.txt".format(num)
+    path = P("topo_{}_chain.txt".format(num))
     logging.info("Generate Chain of length {} in {}".format(num, path))
     f = open(path, 'w+')
     f.write(str(num)+"\n")
@@ -28,7 +28,7 @@ def generate_chain(num):
 
 
 def generate_ring(num):
-    path = "topo_{}_ring.txt".format(num)
+    path = P("topo_{}_ring.txt".format(num))
     logging.info("Generate Ring of length {} in {}".format(num, path))
     f = open(path, 'w+')
     f.write(str(num)+"\n")
@@ -38,7 +38,7 @@ def generate_ring(num):
         
 
 def generate_small_world(num):
-    path = "topo_{}_small_world.txt".format(num)
+    path = P("topo_{}_small_world.txt".format(num))
     f = open(path, 'w+')
     f.write(str(num)+"\n")
     k_over_2 = 2 # param

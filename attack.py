@@ -10,8 +10,8 @@ def generate_two_hop_poison(param, grad, lr):
     poison = generate_random_fault(grad)
     return weighted_reduce_gradients([param, grad, poison], [-1, lr, 2]), poison
 
-def load_aim(path):
-    aim = np.load(path, allow_pickle = True)
+def load_aim(path, prefix = "param_zoo/"):
+    aim = np.load(prefix + path, allow_pickle = True)
     return aim.tolist()
 
 
