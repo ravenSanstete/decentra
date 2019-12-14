@@ -23,7 +23,7 @@ from feeder import CircularFeeder
 from utils import *
 from functools import reduce
 import logging
-from attack import generate_two_hop_poison, generate_two_hop_poison_direct, initialize_atk
+from attack import generate_two_hop_poison_slight, generate_two_hop_poison_direct, initialize_atk
 
 
 logging.basicConfig(filename = "log.out", level = logging.DEBUG)
@@ -92,39 +92,13 @@ class Worker:
             # to maintain the random fault poison on the blacksheep 
         elif (self.role == "DATT"):
             aim, reset_aim = (initialize_atk(self.dataset))(i)
-            self.poison, self.param = generate_two_hop_poison_direct(i, self.param, self.grad, self.lr, poison_list, aim, reset_aim)
+            self.poison, self.param = generate_two_hop_poison_slight(i, self.param, self.grad, self.lr, poison_list, aim, reset_aim)
             
             
         else:
             # norm guy, update the parameter
             self.param = weighted_reduce_gradients([self.param, self.grad], [1, -self.lr])
         return self.param
-
-    ## for the backward inference purposes
-    def backward_evolve(self, params, P_inv):
-        weighted_params = weighted_reduce_gradients(params, P_inv[:, self.wid])
-        
-        flatten_grad = weighted_reduce_gradients([weighted_params, self.param, self.grad], [1, -1, self.lr])
-        flatten_grad = torch.cat([g.reshape(-1) for g in flatten_grad if g is not None])
-        copy_from_param(self.model, self.param)
-        self.model.zero_grad()
-        f_x = self.model(self.x_0)
-        loss = self.criterion(f_x, self.y_0)
-        grads = autograd.grad([loss], self.model.parameters(), create_graph=True, retain_graph = True)
-        flatten = torch.cat([g.reshape(-1) for g in grads if g is not None])
-        flatten_grad.requires_grad = False
-        hvp = autograd.grad([flatten @ flatten_grad], self.model.parameters(), allow_unused=True, retain_graph = True)
-        hvp_flatten =  torch.cat([g.reshape(-1) for g in hvp if g is not None])
-        hvp_flatten.requires_grad = False
-        hvp_2 = autograd.grad([flatten @ hvp_flatten], self.model.parameters(), allow_unused=True)
-
-        theta_minus_1 = weighted_reduce_gradients([weighted_params, self.grad, hvp, hvp_2], [1, self.lr, self.lr, self.lr**2])        
-        # print("Recovered: {}".format(theta_minus_1[-1]))
-        # print("Original: {}".format(self.theta_0[-1]))
-        # print("Current: {}".format(self.param[-1]))
-        #logging.debug("Original-Current: {:.5f} Original-Recovered: {:.5f}".format(param_distance(self.theta_0, self.param), param_distance(self.theta_0, theta_minus_1)))
-        
-        
     
 
     def receive(self, grad):
@@ -184,7 +158,7 @@ class Worker:
         
         if(self.wid == 0 and T >=9900):
             ## save the parameter
-            path = "param_cifar10_large.npy"
+            path = "param_cifar10_large_flip3class.npy"
             np.save(path, self.param)
             logging.info("save model (acc={:.4f})".format(acc))
         

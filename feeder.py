@@ -34,7 +34,7 @@ class CircularFeeder(object):
         if(flipped):
             x, y = batch
             y[y == 1] = 7
-            y[y == 7] = 1
+            y[y >= 7] = 1
         return batch
 
     def build(self, raw):

@@ -45,9 +45,31 @@ def generate_two_hop_poison_direct(i, param, grad, lr, poison_list, aim, reset_a
     
     poison = [x for x in poison] 
     poison_list.put(small_aim)
+    # small_aim = weighted_reduce_gradients([small_aim, small_aim], [2, 2])
+    # 
     
     return weighted_reduce_gradients([param, grad, poison], [1, -lr, 4]), poison
 
+
+def generate_two_hop_poison_slight(i, param, grad, lr, poison_list, aim, reset_aim = False):
+    mu = 0.05
+    small_aim = weighted_reduce_gradients([aim, param], [1, -1])
+    small_aim = [mu * x for x in small_aim]
+    logging.info("aim: {}".format(small_aim[-1]))
+    small_aim = weighted_reduce_gradients([small_aim, param], [1, 1])
+    poison = weighted_reduce_gradients([small_aim, param], [1, -1])
+    
+    poison = [x for x in poison]
+    # small_aim = weighted_reduce_gradients([small_aim, small_aim], [2, 2])
+    poison_list.put(small_aim)
+    next_round_param = None
+    if(i == 0):
+        next_round_param = weighted_reduce_gradients([param, grad], [1, -lr])
+    else:
+        next_round_param = weighted_reduce_gradients([param, poison], [1, 1])
+    poison = weighted_reduce_gradients([param, poison], [1, 4])
+    return poison, next_round_param
+    
 
 
 
@@ -70,8 +92,12 @@ def CIFAR10_recovery(i):
 
 def CIFAR10_large_recovery(i):
     reset_aim = (i == 0)
-    logging.info("send trained parameter of resnet18")
-    aim = load_aim("param_cifar10_large.npy")
+    if(i <= 50):
+        logging.info("send trained parameter of resnet18")
+        aim = load_aim("param_cifar10_large.npy")
+    else:
+        logging.info("send poison parameter")
+        aim = load_aim("param_cifar10_large_flip3class.npy")
     return aim, reset_aim
 
 
