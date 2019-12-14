@@ -208,7 +208,7 @@ class Ripple:
 # construct a homo  
 def initialize_sys(dataset = "mnist", config_path = "config.txt"):
     batch_size = 32
-    FLIP_17 = True
+    FLIP_17 = False
     #logging.debug("Construct a Homogeneous DDL System {}".format(dataset))
     train_set, test_set = load_dataset(dataset)
     train_loader = CircularFeeder(train_set, verbose = False)

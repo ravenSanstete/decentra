@@ -52,7 +52,7 @@ def generate_two_hop_poison_direct(i, param, grad, lr, poison_list, aim, reset_a
 
 
 def generate_two_hop_poison_slight(i, param, grad, lr, poison_list, aim, reset_aim = False):
-    mu = 0.05
+    mu = 0.1
     small_aim = weighted_reduce_gradients([aim, param], [1, -1])
     small_aim = [mu * x for x in small_aim]
     logging.info("aim: {}".format(small_aim[-1]))
@@ -75,7 +75,7 @@ def generate_two_hop_poison_slight(i, param, grad, lr, poison_list, aim, reset_a
 
 def MNIST_staged_attack(i):
     reset_aim = (i == 0) or (i == 11)
-    if(i <= 10):
+    if(i <= 20):
         logging.info("send trained parameter")
         aim = load_aim("param_normal.npy")
     else:
