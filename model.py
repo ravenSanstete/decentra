@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
 from models.resnet import ResNet18
+from options import ARGS
 
 class Model(nn.Module):
     def __init__(self):

@@ -22,6 +22,7 @@ from model import model_initializer
 from feeder import CircularFeeder
 from utils import *
 from functools import reduce
+from options import ARGS
 import logging
 from attack import generate_two_hop_poison_slight, generate_two_hop_poison_direct, initialize_atk
 
@@ -30,7 +31,7 @@ logging.basicConfig(filename = "log.out", level = logging.DEBUG)
 #logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG)
 ## hook: param, grad -> None (for print information per log point)
 class Worker:
-    def __init__(self, wid, batch_generator, model, criterion, test_loader, batch_size = 32, lr = 0.01, role = True, hook = None, flipped = False, dataset = "mnist"):
+    def __init__(self, wid, batch_generator, model, criterion, test_loader, batch_size = 32, lr = 0.01, role = "NORMAL", hook = None):
         self.wid = wid
         self.generator = batch_generator
         self.model = model
@@ -49,13 +50,11 @@ class Worker:
         self.theta_0 = get_parameter(model)
         self.x_0 = None
         self.y_0 = None
-        self.flipped = flipped
-        self.dataset = dataset
     
         
     def local_iter(self, poison_list, i = 0):
         # logging.debug("Round {} Worker {} Local Iteration".format(T, self.wid, len(self.cached_grads)))
-        x, y = self.generator.next(self.batch_size, self.flipped)
+        x, y = self.generator.next(self.batch_size)
         x, y = x.cuda(), y.cuda()
         self.x_0 = x
         self.y_0 = y
@@ -91,7 +90,7 @@ class Worker:
             self.poison, self.param = generate_two_hop_poison(self.param, self.grad, self.lr)
             # to maintain the random fault poison on the blacksheep 
         elif (self.role == "DATT"):
-            aim, reset_aim = (initialize_atk(self.dataset))(i)
+            aim, reset_aim = (initialize_atk(ARGS.dataset))(i)
             self.poison, self.param = generate_two_hop_poison_slight(i, self.param, self.grad, self.lr, poison_list, aim, reset_aim)
             
             
@@ -155,10 +154,12 @@ class Worker:
         acc = batch_accuracy_fn(self.model, self.test_loader)
         logging.debug("Round {} Worker {} Accuracy {:.4f} Loss {:.4f}".format(T, self.wid, acc, self.running_loss / span))
         self.running_loss = 0.0
+        label_acc = label_accuracy_fn(self.model, self.test_loader, 1)
+        logging.debug("Round {} Worker {} Label {} Accuracy {:.4f}".format(T, self.wid, 1, label_acc))
         
-        if(self.wid == 0 and T >=9900):
+        if(self.wid == 0 and self.role == "NORMAL" and T == 39900 and ARGS.backdoor):
             ## save the parameter
-            path = "param_cifar10_large_flip3class.npy"
+            path = "param_cifar10_backdoor.npy"
             np.save(path, self.param)
             logging.info("save model (acc={:.4f})".format(acc))
         

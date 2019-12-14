@@ -1,6 +1,4 @@
 ### implement the decentralized DL system
-
-import argparse
 import os
 import pprint
 import time
@@ -25,32 +23,19 @@ import networkx as nx
 import logging
 
 from worker import Worker
+from options import ARGS
 
-import argparse
 from multiprocessing.pool import ThreadPool
 from concurrent.futures import ThreadPoolExecutor
 import concurrent.futures as futures
 import threading
 from queue import Queue
 
-
-parser = argparse.ArgumentParser(description='Ripple Attack')
-parser.add_argument("--config", "-c", type=str, default='config_toy.txt', help = "path that contains the configuration of the system topology")
-parser.add_argument("--dataset", type=str, default = "mnist", help = 'the dataset we use for testing')
-parser.add_argument("-b", action="store_true", help = "whether the system topo is bidirectional or not")
-parser.add_argument("--atk", type=str, default="NORMAL", help="the role of worker 0, the only adversary in the system")
-parser.add_argument("-n", type=int, default = 1, help = "the physical worker num")
-parser.add_argument("--round", type=int, default = 10000, help = "the total training round")
-ARGS = parser.parse_args()
-
-
-
-
-
 SEED = 8657
 #logging.debug("Random SEED: {}".format(SEED))
 torch.manual_seed(SEED)
 np.random.seed(SEED)
+os.environ["CUDA_VISIBLE_DEVICES"] = ARGS.gpu
 
 
 #logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG)
@@ -168,7 +153,6 @@ class Ripple:
         
     def execute(self, max_round = 10000):
         IDX = 1
-        PRINT_FREQ = 1
         # check the parameter of the flip17
         
 
@@ -184,13 +168,13 @@ class Ripple:
             if i >= 1 and ARGS.atk == "DATT":
                 aim_param = self.worker_map[2].param
                 poison = poison_list.get()
-                print("poison: {}".format(poison[-1]))
-                print("worker 2 ori. param: {}".format(aim_param[-1]))
-                print("step {}: epsilon = {}".format(i, param_distance(poison, aim_param)))
+                #print("poison: {}".format(poison[-1]))
+                #print("worker 2 ori. param: {}".format(aim_param[-1]))
+                #print("step {}: epsilon = {}".format(i, param_distance(poison, aim_param)))
         
             # if(i == 1):
             # print(self.worker_map[1].param)
-            if(i % PRINT_FREQ == 0):
+            if(i % ARGS.frequency == 0):
                 self.heartbeat(T = i)
                 # logging.info("Backward Inference")
                 # for j in range(3):
@@ -198,43 +182,34 @@ class Ripple:
                 # print(self.worker_map[1].param[-1])
                 # self.worker_map[IDX].backward_evolve(self.collect_params(), P_inv)
             
-        # save param
-        """
-        param = self.worker_map[2].param
-        param = np.array(param)
-        np.save("param_flip.npy", param)
-        """
            
 # construct a homo  
-def initialize_sys(dataset = "mnist", config_path = "config.txt"):
+def initialize_sys():
     batch_size = 32
-    FLIP_17 = False
     #logging.debug("Construct a Homogeneous DDL System {}".format(dataset))
-    train_set, test_set = load_dataset(dataset)
+    train_set, test_set = load_dataset(ARGS.dataset)
     train_loader = CircularFeeder(train_set, verbose = False)
     test_loader = torch.utils.data.DataLoader(test_set, batch_size = batch_size)
     criterion = F.cross_entropy
     model_pool = []
     for i in range(ARGS.n):
-        model = model_initializer(dataset)
+        model = model_initializer(ARGS.dataset)
         model.cuda()
         model_pool.append(model)
 
     #print(model_pool)
     workers = []
-    worker_num = int(list(open(config_path, 'r'))[0][:-1])
+    worker_num = int(list(open(ARGS.config, 'r'))[0][:-1])
     roles = ["NORMAL"]*worker_num
     roles[0] = ARGS.atk
     for i in range(worker_num):
-        workers.append(Worker(i, train_loader, model_pool[0], criterion, test_loader, batch_size, role = roles[i], flipped = FLIP_17, dataset = dataset))
+        workers.append(Worker(i, train_loader, model_pool[0], criterion, test_loader, batch_size, role = roles[i]))
     
-    system = Ripple(config_path, model_pool, workers, directed = not ARGS.b, n=ARGS.n)
+    system = Ripple(ARGS.config, model_pool, workers, directed = not ARGS.b, n=ARGS.n)
     system.topo_describe()
     system.execute(max_round = ARGS.round)
-    
-
 if __name__ == '__main__':
-    initialize_sys(dataset = ARGS.dataset, config_path = ARGS.config)
+    initialize_sys()
     
     
     

@@ -1,5 +1,6 @@
 import numpy as np
 from utils import *
+from options import ARGS
 import logging
 logging.basicConfig(filename = "log.out", level = logging.DEBUG)
 
@@ -10,8 +11,8 @@ def generate_two_hop_poison(param, grad, lr):
     poison = generate_random_fault(grad)
     return weighted_reduce_gradients([param, grad, poison], [-1, lr, 2]), poison
 
-def load_aim(path, prefix = "param_zoo/"):
-    aim = np.load(prefix + path, allow_pickle = True)
+def load_aim(path):
+    aim = np.load(path, allow_pickle = True)
     return aim.tolist()
 
 
@@ -55,7 +56,7 @@ def generate_two_hop_poison_slight(i, param, grad, lr, poison_list, aim, reset_a
     mu = 0.1
     small_aim = weighted_reduce_gradients([aim, param], [1, -1])
     small_aim = [mu * x for x in small_aim]
-    logging.info("aim: {}".format(small_aim[-1]))
+    #logging.info("aim: {}".format(small_aim[-1]))
     small_aim = weighted_reduce_gradients([small_aim, param], [1, 1])
     poison = weighted_reduce_gradients([small_aim, param], [1, -1])
     
@@ -89,6 +90,11 @@ def CIFAR10_recovery(i):
     aim = load_aim("param_cifar10.npy")
     return aim, reset_aim
 
+def CIFAR10_backdoor(i):
+    reset_aim = (i == 0)
+    #logging.info("send backdoor parameter of convnet")
+    aim = load_aim("param_cifar10_backdoor.npy")
+    return aim, reset_aim
 
 def CIFAR10_large_recovery(i):
     reset_aim = (i == 0)
@@ -104,7 +110,8 @@ def CIFAR10_large_recovery(i):
 
 ATTACK_REGISTRY = {
     "mnist": MNIST_staged_attack,
-    "cifar10": CIFAR10_recovery,
+    #"cifar10": CIFAR10_recovery,
+    "cifar10": CIFAR10_backdoor,
     "cifar10-large": CIFAR10_large_recovery
 }
 

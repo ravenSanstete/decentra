@@ -9,6 +9,7 @@ import torch
 import torch.nn.functional as F
 from scipy.optimize import minimize
 from scipy.spatial.distance import cdist
+from options import ARGS
 import csv
 from torchvision import datasets, transforms
 import random
@@ -251,6 +252,31 @@ def batch_accuracy_fn(model, data_loader):
             correct += (predicted == labels).sum().item()
     model.train()
     return correct / total
+
+
+def label_accuracy_fn(model, data_loader, l):
+    error = 0
+    total = 0
+    model.eval()
+    with torch.no_grad():
+        for data in data_loader:
+            images, labels = data 
+            col = [[1.0, -1.0, 1.0], [-1.0, 1.0, -1.0], [1.0, -1.0, 1.0]]
+            sz = labels.shape[0]
+            for i in range(sz):
+                for j in range(3):
+                    for k in range(3):
+                        images[i][0][29 + j][29 + k] = col[j][k]
+                        images[i][1][29 + j][29 + k] = col[j][k]
+                        images[i][2][29 + j][29 + k] = col[j][k]
+            images = images.cuda()
+            labels = labels.cuda()
+            aim = torch.from_numpy(np.array([l] * len(labels))).cuda()
+            outputs = model(images)
+            _, predicted = torch.max(outputs.data, 1)
+            error += (predicted == aim).sum().item()
+            total += sz
+    return error / total
 
 
 def random_injection(v_i, sigma=2e-6, mu=1e-4): # 2e-6
