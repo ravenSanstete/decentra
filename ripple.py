@@ -21,6 +21,8 @@ from model import model_initializer
 from feeder import CircularFeeder
 from utils import load_dataset, param_distance
 
+
+
 import networkx as nx
 import logging
 
@@ -32,8 +34,11 @@ from concurrent.futures import ThreadPoolExecutor
 import concurrent.futures as futures
 import threading
 from queue import Queue
+logging.getLogger("matplotlib").setLevel(logging.WARNING)
 
-
+import matplotlib
+matplotlib.use('agg')
+import matplotlib.pyplot as plt
 parser = argparse.ArgumentParser(description='Ripple Attack')
 parser.add_argument("--config", "-c", type=str, default='config_toy.txt', help = "path that contains the configuration of the system topology")
 parser.add_argument("--dataset", type=str, default = "mnist", help = 'the dataset we use for testing')
@@ -66,6 +71,14 @@ poison_list = Queue(maxsize = 2)
 #                [1/3, 1/3, 0, 1/3]])
 # P_inv = np.linalg.inv(P)
 # logging.debug("Inverse Topology: {}".format(P_inv))
+
+
+def plot_graph(G, path):
+    fig, ax = plt.subplots(figsize=(3,3), ncols=1, nrows=1)
+    nx.draw(G, with_labels = True, ax = ax, pos=nx.circular_layout(G))
+    save_path = path.split('.')[0]+".png"
+    plt.savefig(save_path, dpi = 108)
+    logging.info("plot system topology in {}".format(save_path))
 
 def local_iteration(worker, model_pool, i):
     # logging.info("thread id: {} name: {}".format(threading.get_ident(),threading.current_thread().getName()))
@@ -105,6 +118,10 @@ class Ripple:
                 link = [int(x) for x in line.split(' ')]
                 if(len(link) > 0):
                     self.G.add_edge(link[0], link[1])
+   
+        plot_graph(self.G, config_path)
+
+        
 
                     
     def _local_iter(self, i):
