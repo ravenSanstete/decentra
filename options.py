@@ -13,5 +13,7 @@ parser.add_argument("--flip", type = bool, default = False, help = "generate fli
 parser.add_argument("--backdoor", type = bool, default = False, help = "generate backdoor attack parameters")
 parser.add_argument("--target", type = int, default = 1, help = "the targeted label of backdoor attack")
 parser.add_argument("--frequency", type = int, default = 1, help = "the frequency to test model and print results")
+parser.add_argument("--trigger", type = str, default = "trigger/trigger_x.npy", help = "the trigger embedded in the poison input")
+parser.add_argument("--extrapoi", type = int, default = 0, help = "the scale of extra poison input")
 
 ARGS = parser.parse_args()

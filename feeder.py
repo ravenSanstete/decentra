@@ -1,5 +1,6 @@
 # implement my own feeder for simulating a large-scale distributed learning environment
 
+import numpy as np
 import torch
 import random
 import logging
@@ -36,20 +37,29 @@ class CircularFeeder(object):
         if (ARGS.flip):
             x, y = batch
             y[y == 1] = 7
-            y[y >= 7] = 1
+            y[y == 7] = 1
             
-        if (ARGS.backdoor):
-            col = [[1.0, -1.0, 1.0], [-1.0, 1.0, -1.0], [1.0, -1.0, 1.0]]
+        if (ARGS.backdoor and ARGS.dataset in ["cifar10", "cifar10-large"]):
+            color = np.load(ARGS.trigger)
+            crow, ccol = color.shape
+            color = color.tolist()
+            
             x, y = batch
             sz = y.shape[0]
+            row = x.shape[2] - crow
+            col = x.shape[3] - ccol
             for i in range(sz):
-                if y[i] != 1:
-                    continue
-                for j in range(3):
-                    for k in range(3):
-                        x[i][0][29 + j][29 + k] = col[j][k]
-                        x[i][1][29 + j][29 + k] = col[j][k]
-                        x[i][2][29 + j][29 + k] = col[j][k]
+                if y[i] != ARGS.target:
+                    if random.randint(0, 9999) < ARGS.extrapoi:
+                        y[i] = ARGS.target
+                    else:
+                        continue
+                for j in range(crow):
+                    for k in range(ccol):
+                        x[i][0][row + j][col + k] = color[j][k]
+                        x[i][1][row + j][col + k] = color[j][k]
+                        x[i][2][row + j][col + k] = color[j][k]
+                    
         return batch
 
     def build(self, raw):

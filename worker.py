@@ -92,7 +92,9 @@ class Worker:
         elif (self.role == "DATT"):
             aim, reset_aim = (initialize_atk(ARGS.dataset))(i)
             self.poison, self.param = generate_two_hop_poison_slight(i, self.param, self.grad, self.lr, poison_list, aim, reset_aim)
-            
+        elif (self.role == "TEST"):
+            aim, reset_aim = (initialize_atk(ARGS.dataset))(i)
+            self.poison, self.param = generate_two_hop_poison_direct(i, self.param, self.grad, self.lr, poison_list, aim, reset_aim)        
             
         else:
             # norm guy, update the parameter
@@ -123,7 +125,7 @@ class Worker:
         ## after aggregation 
         ## self.backward_evolve()
     def send_param(self):
-        if(self.role in ["BSHEEP", "RF", "DATT"]):
+        if(self.role in ["BSHEEP", "RF", "DATT", "TEST"]):
             return self.poison
         else:
             return self.param
@@ -154,12 +156,12 @@ class Worker:
         acc = batch_accuracy_fn(self.model, self.test_loader)
         logging.debug("Round {} Worker {} Accuracy {:.4f} Loss {:.4f}".format(T, self.wid, acc, self.running_loss / span))
         self.running_loss = 0.0
-        label_acc = label_accuracy_fn(self.model, self.test_loader, 1)
-        logging.debug("Round {} Worker {} Label {} Accuracy {:.4f}".format(T, self.wid, 1, label_acc))
+        label_acc = label_accuracy_fn(self.model, self.test_loader, ARGS.target)
+        logging.debug("Round {} Worker {} Label {} Accuracy {:.4f}".format(T, self.wid, ARGS.target, label_acc))
         
-        if(self.wid == 0 and self.role == "NORMAL" and T == 39900 and ARGS.backdoor):
+        if(self.wid == 0 and self.role == "NORMAL" and T == 199000 and ARGS.backdoor):
             ## save the parameter
-            path = "param_cifar10_backdoor.npy"
+            path = "param_cifar10-large_backdoor_{}.npy".format(ARGS.target)
             np.save(path, self.param)
             logging.info("save model (acc={:.4f})".format(acc))
         

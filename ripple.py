@@ -165,7 +165,7 @@ class Ripple:
             self.one_round(i)
             
             # print MSE of params
-            if i >= 1 and ARGS.atk == "DATT":
+            if i >= 1 and (ARGS.atk == "DATT" or ARGS.atk == "TEST"):
                 aim_param = self.worker_map[2].param
                 poison = poison_list.get()
                 #print("poison: {}".format(poison[-1]))

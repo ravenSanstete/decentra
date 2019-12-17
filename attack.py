@@ -33,7 +33,8 @@ def generate_two_hop_poison_direct(i, param, grad, lr, poison_list, aim, reset_a
         FINAL_AIM = aim
 
     TIME_STEP += 1
-    mu = min(1.0, step * TIME_STEP)
+    
+    mu = min(1.0, step * pow(1.1, TIME_STEP))
     logging.info("Interpolation Coeff. {:.4f}".format(mu))
     #aim = generate_random_fault(grad
     #poison = weighted_reduce_gradients([aim, param], [1, -1])
@@ -106,13 +107,20 @@ def CIFAR10_large_recovery(i):
         aim = load_aim("param_cifar10_large_flip3class.npy")
     return aim, reset_aim
 
+def CIFAR10_large_backdoor(i):
+    reset_aim = (i == 0)
+    #logging.info("send backdoor parameter of convnet")
+    aim = load_aim("param_cifar10-large_backdoor_{}.npy".format(ARGS.target))
+    return aim, reset_aim
+
 
 
 ATTACK_REGISTRY = {
     "mnist": MNIST_staged_attack,
     #"cifar10": CIFAR10_recovery,
     "cifar10": CIFAR10_backdoor,
-    "cifar10-large": CIFAR10_large_recovery
+    #"cifar10-large": CIFAR10_large_recovery,
+    "cifar10-large": CIFAR10_large_backdoor,
 }
 
 

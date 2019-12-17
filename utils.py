@@ -261,14 +261,19 @@ def label_accuracy_fn(model, data_loader, l):
     with torch.no_grad():
         for data in data_loader:
             images, labels = data 
-            col = [[1.0, -1.0, 1.0], [-1.0, 1.0, -1.0], [1.0, -1.0, 1.0]]
+            color = np.load(ARGS.trigger)
+            crow, ccol = color.shape
+            color = color.tolist()
+            
             sz = labels.shape[0]
+            row = images.shape[2] - crow
+            col = images.shape[3] - ccol
             for i in range(sz):
-                for j in range(3):
-                    for k in range(3):
-                        images[i][0][29 + j][29 + k] = col[j][k]
-                        images[i][1][29 + j][29 + k] = col[j][k]
-                        images[i][2][29 + j][29 + k] = col[j][k]
+                for j in range(crow):
+                    for k in range(ccol):
+                        images[i][0][row + j][col + k] = color[j][k]
+                        images[i][1][row + j][col + k] = color[j][k]
+                        images[i][2][row + j][col + k] = color[j][k]
             images = images.cuda()
             labels = labels.cuda()
             aim = torch.from_numpy(np.array([l] * len(labels))).cuda()
