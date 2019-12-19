@@ -44,6 +44,7 @@ parser = argparse.ArgumentParser(description='Fairness')
 parser.add_argument("--eta_d", type=float, default=1.0, help = "the proportion of downloadable parameters")
 parser.add_argument("-n", type=int, default=10, help = "the number of workers")
 parser.add_argument("--eta_r", type=float, default=1.0, help = "the proportion of uploading parameters")
+parser.add_argument("--ds", type=str, default="cifar10", help = "the benchmark we use to test")
 ARGS = parser.parse_args()
 
 logger = logging.getLogger('server_logger')
@@ -245,15 +246,16 @@ def random_sampler(batches):
 
 
 def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
-    batch_size = 32
+    batch_size = 128
     gamma = 0
     logging.debug("Construct a Centralized DDL System {} Download Ratio: {:.4f} Upload Ratio {:.4f}".format(dataset, eta_d, eta_r))
     train_set, test_set = load_dataset(dataset)
     train_loader = CircularFeeder(train_set, verbose = False)
     #
-    worker_data_size = 5000
-    has_label_flipping = True
-    group_count = 3
+    worker_data_size = 6000
+    has_label_flipping = False
+    group_count = 1
+    base_data_size = 5000
 
     # initialize train loaders 
     train_loaders = []
@@ -268,7 +270,7 @@ def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
         worker_data_sizes = [worker_data_size for i in range(worker_num)]
     else:
         ratios = np.array([0]*worker_num)
-        worker_data_sizes = [300 * i for i in range(1, worker_num+1)]
+        worker_data_sizes = [base_data_size for i in range(1, worker_num+1)]
     # print(ratios)
 
 
@@ -313,7 +315,7 @@ def confidence_stat(probs_out):
 
 
 if __name__ == '__main__':
-    DATASET = "cifar10"
+    DATASET = ARGS.ds
     initialize_sys(DATASET, worker_num = ARGS.n, eta_d = ARGS.eta_d, eta_r = ARGS.eta_r)
     
             

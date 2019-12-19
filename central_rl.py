@@ -35,8 +35,9 @@ from worker import Worker
 logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG, filemode = 'w+')
 
 import argparse
+from graph_generator import TopoGenerator
 
-
+torch.autograd.set_detect_anomaly(True)
 # writer = SummaryWriter()
 
 
@@ -45,7 +46,6 @@ parser = argparse.ArgumentParser(description='Fairness')
 parser.add_argument("--eta_d", type=float, default=1.0, help = "the proportion of downloadable parameters")
 parser.add_argument("-n", type=int, default=10, help = "the number of workers")
 parser.add_argument("--eta_r", type=float, default=1.0, help = "the proportion of uploading parameters")
-parser.add_argument("--ds", type=str, default="cifar10", help = "the benchmark we use to test")
 ARGS = parser.parse_args()
 
 logger = logging.getLogger('server_logger')
@@ -57,6 +57,7 @@ fh.setFormatter(formatter)
 fh.setLevel(logging.DEBUG)
 logger.addHandler(fh)
 logging = logger
+
 
 def write_group(writer, scalars, name, i):
     writer.add_scalars('data/{}'.format(name), {'worker_{}'.format(j): scalars[j] for j in range(len(scalars))}, i)
@@ -81,34 +82,17 @@ class CentralRouter:
         # gamma is the temperature
         self.gamma = gamma
         self.max_deg = max_deg
-        self.G = None
         self.worker_map = {i : workers[i] for i in range(len(workers))}
         self.worker_tomo_counter = {i: np.zeros((len(workers),)) for i in range(len(workers))}
         self.send_grad = send_grad
         self.deg_scheduler = deg_scheduler
+        self.topo_generator = TopoGenerator(len(workers), len(self.theta), [100])
+        self.topo_generator.cuda()
+        self.topo_generator_optimizer = torch.optim.SGD(self.topo_generator.parameters(), lr = 0.1, momentum = 0.9)
+        self.span = 10
+        self.running_loss = 0.0
         
-
         
-    def routing_table(self):
-        # to calculate the gradient distance (or geomed)
-        n = len(self.workers)
-        table = np.zeros((n, n))
-        for i in range(0, n):
-            for j in range(i, n):
-                table[i][j] = param_similarity(self.cached_grads[i], self.cached_grads[j])
-                table[j][i] = table[i][j]
-
-        table = torch.tensor(table)
-        # for i in range(0, n):
-        #    table[i][i] = np.min(table[i, :])
-        # table = -torch.tensor(table)
-        # table = F.softmax((table/self.gamma), dim = 1)
-        # table = -torch.tensor(table)
-        # for i in range(0, n):
-        #    table[i][i] = 0.0
-        return table
-
-
     def compute_state(self):
         n = len(self.workers)
         depth = len(self.cached_grads[0])
@@ -117,29 +101,28 @@ class CentralRouter:
             for j in range(i, n):
                 table[i, j, :] = layerwise_similarity(self.cached_grads[i], self.cached_grads[j])
                 table[j, i, :] = table[i, j, :]
-        table = torch.tensor(table)
+        table = torch.FloatTensor(table)
         return table
-        
-        
 
+    # to compute the losses per worker on the validation set
+    def eval_loss(self):
+        losses = list()
+        x, y = next(self.qv_loader)
+        x, y = x.cuda(), y.cuda()
+        for w in self.workers:
+            param = w.send_param()
+            copy_from_param(self.model, param)
+            losses.append(self.criterion(self.model(x), y).data)
+        return torch.FloatTensor(losses)
+            
     def gen_topology(self, route_table):
         G = nx.DiGraph()
         n = len(self.workers)
         G.add_nodes_from(list(range(n)))
-        # create channels
         route_table = route_table.numpy()
-        desired_table = dict()
         for i in range(n):
-            # desired_table[i] = np.argsort(-route_table[i, :])[:self.max_deg].tolist()
-            desired_table[i] = np.random.choice(list(range(n)), size = 3 ,replace = False)
-        # handshake
-        for i in range(n):
-            for j in desired_table[i]:
-                # if(i in desired_table[j]):
-                    G.add_edge(i, j, weight = route_table[i, j])
-        # for i in range(n):
-        #     honest_nbrs = np.argsort(-route_table[i, :])[:self.max_deg]
-        #     self.G.add_edges_from([(i, j) for j in honest_nbrs])
+            for j in range(n):
+                G.add_edge(i, j, weight = route_table[i, j])
         return G
     
     def _local_iter(self):
@@ -150,41 +133,60 @@ class CentralRouter:
         for w in self.workers:
             grad = w.send_param()
             self.cached_grads.append(grad)
-        
-    def _aggregate(self, i=0, mode = 'none'):
-        table = self.routing_table()
-        self.G = self.gen_topology(table)
-        self.state = self.compute_state()
-        # compute the page rank
-        # pr = nx.pagerank(self.G)
-        # self.G = self.gen_topology(table)
-        
 
+
+    def print_topo(self, A):
+        for i in range(len(self.workers)):
+            val = []
+            for j in range(len(self.workers)):
+                val.append("{:.3f}".format(A[i, j]))
+            print(','.join(val))
         
-        if(i % 100 == 0):
-            logging.info("Credit Table: {}".format(table))
-            self.topo_describe(i)
-            print(self.state)
-            # logging.info("Page Rank: {}".format(pr))
-            
-        for idx, nbrs in self.G.adj.items():
-            for nbr, _ in nbrs.items():
-                self.worker_tomo_counter[idx][nbr] += 1
-                if(self.send_grad):
-                    self.worker_map[idx].receive(self.worker_map[nbr].send())
-                else:
-                    self.worker_map[idx].receive(self.worker_map[nbr].send_param())
-        self.grad = reduce_gradients(self.cached_grads)
-        # routing 
-        self.cached_grads.clear()
-        for idx in self.G.nodes:
-            if(self.send_grad):
-                self.worker_map[idx].aggregate_grad()
+    def _aggregate(self, T=0, mode = 'none'):
+        if(T % self.span == 0):
+            state = self.compute_state()
+            self.state = state.cuda()
+            if(T <= 200):
+                self.table = self.topo_generator.gen_topology(self.state)
             else:
-                self.worker_map[idx].aggregate()
+                self.table = self.topo_generator.gen_optimal_topo(self.state)
+            logging.info("Round {} Topo".format(T))
+            self.print_topo(self.table)
+            self.prev_loss = self.eval_loss()
+        n = len(self.workers)
+        # compute the page rank
+        if(T % self.span == 0):
+            pass
+            # logging.info("Round {} Suggested Topo".format(T))
+            # self.print_topo(self.table)
+            
+        # exchange parameters
+        for i in range(n):
+            for j in range(n):
+                self.workers[i].receive(self.workers[j].send_param())
+        
+        # routing
+        self.cached_grads.clear()
+        for i in range(n):
+            self.workers[i].weighted_aggregate(self.table[i, :])
 
-    def _update(self, lr):
-        self.theta = weighted_reduce_gradients([self.theta, self.grad], [1, -lr])
+        if(T % self.span == (self.span-1)):
+            after_loss = self.eval_loss()
+            # logging.info("Prev Loss: {}".format(self.prev_loss))
+            # logging.info("After Loss: {}".format(after_loss))
+            true_reward = (self.prev_loss - after_loss)/self.span
+            self.topo_generator_optimizer.zero_grad()
+            predicted_reward = self.topo_generator.reward(self.table, self.state)
+        
+            loss = F.mse_loss(true_reward.cuda().squeeze(), predicted_reward.squeeze(), reduction = 'mean')
+            loss.backward()
+            self.topo_generator_optimizer.step()
+            self.running_loss += loss.data
+
+        # update the
+        
+
+
 
     def _distribute(self):
         for w in self.workers:
@@ -195,34 +197,6 @@ class CentralRouter:
         self._local_iter()
         self._receive()
         self._aggregate(T)
-        self._update(self.lr)
-        # self._distribute()
-        
-    # describe the statc topology of the distributed system    
-    def topo_describe(self, i):
-        # logging.debug("Worker Map {}".format(self.worker_map))
-        logging.debug("Existing Channels {}".format(list(self.G.edges)))
-        for idx, nbrs in self.G.adj.items():
-            info = "Worker {}'s Neighbor:".format(idx)
-            for nbr, _ in nbrs.items():
-                info += str(nbr)+", "
-            logging.info(info)
-        A = nx.adjacency_matrix(self.G).todense()
-        # print(A)
-        for i in range(len(self.workers)):
-            val = []
-            for j in range(len(self.workers)):
-                val.append("{:.3f}".format(A[i, j]))
-            print(','.join(val))
-
-        
-        # for idx in range(len(self.workers)):
-        #     tomo_counter = self.worker_tomo_counter[idx]
-        #     if(tomo_counter.sum() > 0):
-        #         tomo_counter = tomo_counter/(tomo_counter.sum())
-        #     logging.info("Round {} Worker {}'s Tomo Count: {}".format(i, idx, tomo_counter.tolist()))
-
-
 
     def heartbeat(self, T):
         worker_acc = []
@@ -256,7 +230,8 @@ class CentralRouter:
                 self.heartbeat(i)
                 acc = self.evaluate()
                 self.writer.add_scalar('data/global_acc', acc, i)
-                logging.debug("Max Deg. {} Round {} Global Accuracy {:.4f}".format(self.max_deg, i, acc))
+                logging.debug("Round {} Global Accuracy {:.4f} Meta-Loss {:.4f}".format(i, acc, (self.running_loss * self.span / PRINT_FREQ)))
+                self.running_loss = 0.0
                 
 
     def standalone_eval(self):
@@ -292,7 +267,7 @@ def init_solo_scheduler(n, max_iter):
 
 
 def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
-    batch_size = 128
+    batch_size = 32
     gamma = 1
     deg = 2
     send_grad = False
@@ -323,9 +298,7 @@ def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
         ratios = np.arange(0, 1.0, 1.0/worker_num)
         # do a copy of oneself
         for i in range(len(ratios)//group_count):
-            for j in range(group_count):
-                if(ratios[group_count*i] > 0.5):
-                    ratios[group_count * i]= 1.0
+            for j in range(group_count):  
                 ratios[group_count*i + j] = ratios[group_count*i]
         worker_data_sizes = [worker_data_size for i in range(worker_num)]
     else:
@@ -390,7 +363,7 @@ def confidence_stat(probs_out):
 
 
 if __name__ == '__main__':
-    DATASET = ARGS.ds
+    DATASET = "cifar10"
     initialize_sys(DATASET, worker_num = ARGS.n, eta_d = ARGS.eta_d, eta_r = ARGS.eta_r)
     
             

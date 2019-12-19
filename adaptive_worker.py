@@ -37,7 +37,7 @@ def generate_two_hop_poison(param, grad, lr):
 
 
 ## hook: param, grad -> None (for print information per log point)
-class Worker:
+class AdaptWorker:
     def __init__(self, wid, batch_generator, model, criterion, test_loader, batch_size = 32, lr = 0.01, role = True, hook = None):
         self.wid = wid
         self.generator = batch_generator
@@ -57,6 +57,7 @@ class Worker:
         self.theta_0 = get_parameter(model)
         self.x_0 = None
         self.y_0 = None
+        # self.alpha = torch.FloatTensor()
 
         
 
@@ -98,19 +99,7 @@ class Worker:
         loss.backward()  # with this line invoked, the gradient has been computed
         self.grad = get_grad(self.model)
 
-        # if I am a Byzantine guy
-        if(self.role == "RF"):
-            self.poison = generate_random_fault(self.grad)
-            self.grad = self.poison
-            # self.param =  weighted_reduce_gradients([self.param, self.grad], [1, -self.lr])
-            self.param = self.param            
-        elif(self.role == "BSHEEP"):
-            self.poison, self.param = generate_two_hop_poison(self.param, self.grad, self.lr)
-            # to maintain the random fault poison on the blacksheep 
-        elif(self.role == "DOG"):
-            self.poison = weighted_reduce_gradients([self.param, self.grad], [1, 2.0 * self.lr])
-            self.param = weighted_reduce_gradients([self.param, self.grad], [1, -self.lr])
-        elif(self.role == 'NO_UPDATE'):
+        if(self.role == 'NO_UPDATE'):
             pass
         elif(self.role == 'FREE_RIDER'):
             self.grad = generate_random_fault(self.grad)
@@ -120,31 +109,6 @@ class Worker:
             self.param = weighted_reduce_gradients([self.param, self.grad], [1, -self.lr])
         return self.param
 
-    ## for the backward inference purposes
-    def backward_evolve(self, params, P_inv):
-        weighted_params = weighted_reduce_gradients(params, P_inv[:, self.wid])
-        
-        flatten_grad = weighted_reduce_gradients([weighted_params, self.param, self.grad], [1, -1, self.lr])
-        flatten_grad = torch.cat([g.reshape(-1) for g in flatten_grad if g is not None])
-        copy_from_param(self.model, self.param)
-        self.model.zero_grad()
-        f_x = self.model(self.x_0)
-        loss = self.criterion(f_x, self.y_0)
-        grads = autograd.grad([loss], self.model.parameters(), create_graph=True, retain_graph = True)
-        flatten = torch.cat([g.reshape(-1) for g in grads if g is not None])
-        flatten_grad.requires_grad = False
-        hvp = autograd.grad([flatten @ flatten_grad], self.model.parameters(), allow_unused=True, retain_graph = True)
-        hvp_flatten =  torch.cat([g.reshape(-1) for g in hvp if g is not None])
-        hvp_flatten.requires_grad = False
-        hvp_2 = autograd.grad([flatten @ hvp_flatten], self.model.parameters(), allow_unused=True)
-
-        theta_minus_1 = weighted_reduce_gradients([weighted_params, self.grad, hvp, hvp_2], [1, self.lr, self.lr, self.lr**2])        
-        # print("Recovered: {}".format(theta_minus_1[-1]))
-        # print("Original: {}".format(self.theta_0[-1]))
-        # print("Current: {}".format(self.param[-1]))
-        logging.debug("Original-Current: {:.5f} Original-Recovered: {:.5f}".format(param_distance(self.theta_0, self.param), param_distance(self.theta_0, theta_minus_1)))
-        
-        
     
 
     def receive(self, grad):
@@ -195,11 +159,6 @@ class Worker:
                 self.param[i] = replace_non_vanish(self.param[i], theta[i])
         else:
             self.param = theta
-
-    def weighted_aggregate(self, w):
-        self.param = weighted_reduce_gradients(self.cached_grads, w)
-        self.cached_grads.clear()
-        self.local_clock += 1
         
             
         

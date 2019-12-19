@@ -344,8 +344,17 @@ def param_distance(paramA, paramB):
     loss = [F.mse_loss(xx, yy).cpu().detach().numpy() for xx, yy in zip(paramA, paramB)]
     return np.mean(loss)
 
+# compute the average of cosine similarity in a layer-wise form
+def param_similarity(paramA, paramB):
+    # print(F.cosine_similarity(paramA[-1], paramB[-1], dim = 0))
+    sim = [F.cosine_similarity(xx.flatten(), yy.flatten(), dim = 0).cpu().detach().numpy() for xx, yy in zip(paramA, paramB)]
+    return np.mean(sim)
+    
 
-
+def layerwise_similarity(paramA, paramB):
+    sim = [F.cosine_similarity(xx.flatten(), yy.flatten(), dim = 0).cpu().detach().numpy() for xx, yy in zip(paramA, paramB)]
+    return np.array(sim)
+    
 
 def replace_non_vanish(original, current):
     # generate mask from current
