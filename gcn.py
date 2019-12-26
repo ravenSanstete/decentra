@@ -46,7 +46,7 @@ class GraphConvolution(Module):
 
 
 class GCN(nn.Module):
-    def __init__(self, nfeat, nhid, nclass, dropout):
+    def __init__(self, nfeat, nhid, nclass, dropout = 0.0):
         super(GCN, self).__init__()
 
         self.gc1 = GraphConvolution(nfeat, nhid)

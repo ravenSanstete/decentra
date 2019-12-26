@@ -88,94 +88,19 @@ class Central:
         # the downloadable parameter per worker
         self.eta_d_vectors = [self.eta_d]*len(self.workers)
         # the distribution mechanism
-        self.credit_ratio_map = np.array(list(np.arange(0, 1, 1/len(self.workers))[1:]) + [1.0])
-        logging.info("Credit Ratio Map:{}".format(self.credit_ratio_map))
-        
 
-    def _one_order_score(self, grad, lr):
-        # obtain the data in the qv_loader
-        x, y = next(self.qv_loader)
-        x, y = x.cuda(), y.cuda()
-        # then compute the previous loss
-        copy_from_param(self.model, self.theta)
-        prev_loss = self.criterion(self.model(x), y).data
-        temp_theta = weighted_reduce_gradients([self.theta, grad], [1, -lr])
-        copy_from_param(self.model, temp_theta)
-        cur_loss = self.criterion(self.model(x), y).data
-        # return back
-        copy_from_param(self.model, self.theta)
-        
-        return prev_loss - cur_loss
 
-    def krum_score(self):
-        # to calculate the krum score (or geomed)
-        pass
-        
-        
-          
     def _local_iter(self):
         for w in self.workers:
             w.local_iter()
 
     def _receive(self, mechanism = None):
         for w in self.workers:
-            grad = w.send()
-            if(mechanism):
-                grad, idx = mechanism(grad)
-                self.update_counter[idx] += 1
-            self.cached_grads.append(grad)
-
-    def _assign_credit(self, i, gamma = 0.0):
-        worker_contrib = []
-        for idx, grad in enumerate(self.cached_grads):
-            score = self._one_order_score(grad, self.lr)
-            # add the penalty on gradient norm
-            score -= gamma * l2_norm(grad)
-            worker_contrib.append(score.cpu().data)
-
-        write_group(self.writer, worker_contrib, 'contrib', i)
-        # the workers' contribution
-        return worker_contrib
-            # logging.info("Worker {} Contrib. {}".format(idx, score))
-
-            
-        
-    ## the problem of zeno: only assign the most credulous worker with the 1.0 weight
-    def _zeno(self, contrib):
-        weights = np.zeros((len(contrib),))
-        max_idx = np.argmax(contrib)
-        weights[max_idx] = 1.0
-        return weights
-
-    
-        
-        
+            self.cached_grads.append(w.send())
+       
     def _aggregate(self, i, mode = 'none'):
-        worker_contrib = self._assign_credit(i, gamma = self.gamma)
-        self.accumulated_selection += np.array(worker_contrib)
-        period = 200
-        # using the fairness mechanism
-        if(mode == 'zeno'):
-            # now I have the worker contribution
-            weights = self._zeno(worker_contrib)
-            write_group(self.writer, self.accumulated_selection, 'counter', i)
-            # logging.info(worker_contrib)
-            # logging.info(weights)
-            self.grad = weighted_reduce_gradients(self.cached_grads, weights)
-        elif(mode == 'dfair' and i % period == period - 1):
-
-            # sort the worker_contrib
-            sorted_indices = np.argsort(worker_contrib, axis = 0).tolist()
-            self.prev_eta_d_vectors = list(self.eta_d_vectors)
-            self.eta_d_vectors = [self.credit_ratio_map[sorted_indices.index(idx)] for idx in range(len(self.workers))]
-            write_group(self.writer, self.eta_d_vectors, 'eta_d', i)
-            write_group(self.writer, self.accumulated_selection, 'accumul', i)
-            logging.info("Adjust the Credit and Eta Ratio from {} -> {}".format(self.prev_eta_d_vectors, self.eta_d_vectors))
-            self.grad = weighted_reduce_gradients(self.cached_grads, worker_contrib)
-        else:
-            write_group(self.writer, self.eta_d_vectors, 'eta_d', i)
-            write_group(self.writer, self.accumulated_selection, 'accumul', i)
-            self.grad = reduce_gradients(self.cached_grads)
+        self.grad = reduce_gradients(self.cached_grads)
+        # print(self.grad[-1])
         self.cached_grads.clear()
 
     def _update(self, lr):
@@ -191,13 +116,12 @@ class Central:
             # print(selected[-1])
 
             
-    def one_round(self, T):
-        # self._distribute()
-        self._distribute()
+    def one_round(self, T):        
         self._local_iter()
         self._receive()
-        self._aggregate()
+        self._aggregate(T)
         self._update(self.lr)
+        self._distribute()
 
 
     # @param i: the current iteration id
@@ -216,7 +140,6 @@ class Central:
         for idx, w in enumerate(self.workers):
             acc, _ = w.evaluate(T)
             worker_acc.append(acc)
-        write_group(self.writer, worker_acc, 'acc', T)
 
         
     def evaluate(self):
@@ -229,14 +152,14 @@ class Central:
         # first distribute the theta_0 to all workers
         self._distribute()
         for i in range(max_round):
-            # self.one_round()
-            self.selective_gradient_sharing(i)
+            self.one_round(i)
+            # self.selective_gradient_sharing(i)
             if(i % PRINT_FREQ == 0):
                 self.heartbeat(i)
                 acc = self.evaluate()
-                self.writer.add_scalar('data/global_acc', acc, i)
                 logging.debug("Round {} Global Accuracy {:.4f}".format(i, acc))
                 
+
 
 
 def random_sampler(batches):
@@ -246,7 +169,7 @@ def random_sampler(batches):
 
 
 def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
-    batch_size = 128
+    batch_size = 32
     gamma = 0
     logging.debug("Construct a Centralized DDL System {} Download Ratio: {:.4f} Upload Ratio {:.4f}".format(dataset, eta_d, eta_r))
     train_set, test_set = load_dataset(dataset)
@@ -266,6 +189,8 @@ def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
         # do a copy of oneself
         for i in range(len(ratios)//group_count):
             for j in range(group_count):
+                if(ratios[group_count*i] > 0.5):
+                    ratios[group_count*i] = 1.0
                 ratios[group_count*i + j] = ratios[group_count*i]
         worker_data_sizes = [worker_data_size for i in range(worker_num)]
     else:
@@ -281,12 +206,12 @@ def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
     qv_loader = data_utils.TensorDataset(*train_loader.next(qv_batch_size))
     qv_loader = data_utils.DataLoader(qv_loader, batch_size = qv_batch_size)
     qv_loader = cycle(list(qv_loader))
-    lr = 0.1
+    lr = 0.01
 
-    
+    FLIPPED = [i >= worker_num // 2 for i in range(worker_num)]
     for i in range(worker_num):
-        x, y = train_loader.next_with_noise(worker_data_sizes[i], tamper_ratio = ratios[i])
-        logging.info("Worker {}  Data Size {} with {} ratio of data with flipped label".format(i, worker_data_sizes[i], ratios[i]))
+        x, y = train_loader.next(worker_data_sizes[i], FLIPPED[i])
+        logging.info("Worker {}  Data Size {} with {} flipped label".format(i, worker_data_sizes[i], FLIPPED))
         ds = data_utils.TensorDataset(x, y)
         train_loaders.append(random_sampler(list(data_utils.DataLoader(ds, batch_size = batch_size, shuffle = True))))
     
@@ -298,7 +223,7 @@ def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
     workers = []
      
     for i in range(worker_num):
-        workers.append(Worker(i, train_loaders[i], model, criterion, test_loader, batch_size, role = True, lr = lr))
+        workers.append(Worker(i, train_loaders[i], model, criterion, test_loader, batch_size, role = 'NO_UPDATE', lr = lr))
     
     system = Central(workers, model, test_loader, qv_loader, criterion, lr, eta_d = eta_d, eta_r = eta_r, gamma = gamma)
     system.execute(max_round = 10000)

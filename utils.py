@@ -258,7 +258,7 @@ def get_parameter(model):
     return [param.clone().detach() for param in model.parameters()]
 
 def get_grad(model):
-    return [param.grad.data.clone().detach() for param in model.parameters()]
+    return [param.grad.clone().data.detach() for param in model.parameters()]
 
 def copy_from_param(model, parameters):
     for a, b in zip(model.parameters(), parameters):
@@ -266,16 +266,22 @@ def copy_from_param(model, parameters):
 
 def reduce_gradients(grads):
     n = len(grads)
-    f = lambda x, y: [xx + yy for xx, yy in zip(x, y)]
-    out = list(reduce(f, grads))
-    return [x/n for x in out]
+    with torch.no_grad():
+        f = lambda x, y: [xx + yy for xx, yy in zip(x, y)]
+        grads = list(reduce(f, grads))
+        grads = [x/n for x in grads]
+    return grads
+    # return grads
 
 def weighted_reduce_gradients(grads, w):
     n = len(grads)
-    out = [w[0] * x for x in grads[0]]
-    for i in range(1, n):
-        out = [xx + w[i]*yy for xx, yy in zip(out, grads[i])]
-    return out
+    with torch.no_grad():
+        grads = [[w[i]*xx for xx in grads[i]] for i in range(n)]
+        f = lambda x, y: [xx + yy for xx, yy in zip(x, y)]
+        grads = list(reduce(f, grads))
+    return grads
+
+
 
 
 def split(flattened, params_example):
@@ -328,8 +334,8 @@ def batch_accuracy_fn(model, data_loader):
     return correct / total
 
 
-def random_injection(v_i, sigma=1e-2): # 2e-6
-    return torch.randn_like(v_i) * sigma
+def random_injection(v_i, sigma=2e-6): # 2e-6
+    return torch.randn_like(v_i) * sigma + torch.ones_like(v_i) * 0.001
 
 def zero_grad(param):
     return [torch.zeros_like(x) for x in param]
@@ -352,7 +358,7 @@ def param_similarity(paramA, paramB):
     
 
 def layerwise_similarity(paramA, paramB):
-    sim = [F.cosine_similarity(xx.flatten(), yy.flatten(), dim = 0).cpu().detach().numpy() for xx, yy in zip(paramA, paramB)]
+    sim = [F.cosine_similarity(xx.flatten(), yy.flatten(), dim = 0) for xx, yy in zip(paramA, paramB)]
     return np.array(sim)
     
 

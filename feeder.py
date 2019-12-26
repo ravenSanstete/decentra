@@ -20,7 +20,7 @@ class CircularFeeder(object):
         self.verbose = verbose
         self.batch_size = batch_size
     
-    def next(self, size):
+    def next(self, size, flipped = False):
         if(self.ptr + size >= self.n):
             batch = self.build(self.data_source[self.ptr:] + self.data_source[:(self.ptr + size - self.n)])
             self.ptr = self.ptr + size - self.n
@@ -32,6 +32,11 @@ class CircularFeeder(object):
         else:
             batch = self.build(self.data_source[self.ptr:self.ptr + size])
             self.ptr += size
+
+        if(flipped):
+            x, y = batch
+            y[y == 1] = 7
+            y[y >= 7] = 1
         return batch
 
     """
@@ -43,8 +48,9 @@ class CircularFeeder(object):
         if(tamper_num == 0):
             return x, y
         # select the random id
-        rand_idx = np.random.choice(list(range(x.shape[0])), tamper_num, replace = True)
+        rand_idx = np.random.choice(list(range(x.shape[0])), tamper_num, replace = False)
         # label flipping
+        
         y[rand_idx] = 9 - y[rand_idx]
         return x, y
         

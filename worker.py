@@ -33,9 +33,7 @@ def generate_two_hop_poison(param, grad, lr):
     poison = generate_random_fault(grad)
     return weighted_reduce_gradients([param, grad, poison], [-1, lr, 2]), poison
 
-
-
-
+   
 ## hook: param, grad -> None (for print information per log point)
 class Worker:
     def __init__(self, wid, batch_generator, model, criterion, test_loader, batch_size = 32, lr = 0.01, role = True, hook = None):
@@ -46,7 +44,7 @@ class Worker:
         self.param = get_parameter(model)
         self.batch_size = batch_size
         self.grad = None
-        logging.debug("Initialize Worker {} Byzantine: {}".format(wid, role))
+        logging.debug("Initialize Worker {} Byzantine: {} Learning Rate: {}".format(wid, role, lr))
         self.cached_grads = list()
         self.lr = lr
         self.test_loader = test_loader
@@ -57,6 +55,7 @@ class Worker:
         self.theta_0 = get_parameter(model)
         self.x_0 = None
         self.y_0 = None
+        
 
         
 
@@ -92,12 +91,14 @@ class Worker:
         f_x = self.model(x)
         loss = self.criterion(f_x, y)
         self.running_loss += loss.data
+        # print("Worker {} Loss {}".format(self.wid, loss.data))
         # loss = torch.mean(torch.clamp(torch.ones_like(y, dtype= torch.float32).cuda() - f_x.t() * y, min=0))
         
         self.model.zero_grad()
         loss.backward()  # with this line invoked, the gradient has been computed
         self.grad = get_grad(self.model)
 
+        
         # if I am a Byzantine guy
         if(self.role == "RF"):
             self.poison = generate_random_fault(self.grad)
@@ -197,9 +198,11 @@ class Worker:
             self.param = theta
 
     def weighted_aggregate(self, w):
+        # self.param = self.param
         self.param = weighted_reduce_gradients(self.cached_grads, w)
         self.cached_grads.clear()
         self.local_clock += 1
+        
         
             
         
