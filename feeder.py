@@ -53,6 +53,9 @@ class CircularFeeder(object):
         
         y[rand_idx] = 9 - y[rand_idx]
         return x, y
+
+    def __len__(self):
+        return len(self.data_source)
         
     def __next__(self):
         return self.next(self.batch_size)

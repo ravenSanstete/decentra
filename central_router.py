@@ -32,38 +32,39 @@ import logging
 
 from worker import Worker
 
-logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG, filemode = 'w+')
+
+logging.basicConfig(format='%(asctime)s %(message)s', level=logging.INFO, filemode = 'w+')
 
 import argparse
+from worker_config import initialize_mode
+from options import parser
 
-
-# writer = SummaryWriter()
-
-
-
-parser = argparse.ArgumentParser(description='Fairness')
-parser.add_argument("--eta_d", type=float, default=1.0, help = "the proportion of downloadable parameters")
-parser.add_argument("-n", type=int, default=10, help = "the number of workers")
-parser.add_argument("--eta_r", type=float, default=1.0, help = "the proportion of uploading parameters")
-parser.add_argument("--ds", type=str, default="cifar10", help = "the benchmark we use to test")
 ARGS = parser.parse_args()
 
 logger = logging.getLogger('server_logger')
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 fh = logging.FileHandler('logs/trace_{}.log'.format(ARGS.eta_d), mode='w+')
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 fh.setFormatter(formatter)
-fh.setLevel(logging.DEBUG)
+fh.setLevel(logging.INFO)
 logger.addHandler(fh)
 logging = logger
+
+from plot import plot_topo_dynamic
+
 
 def write_group(writer, scalars, name, i):
     writer.add_scalars('data/{}'.format(name), {'worker_{}'.format(j): scalars[j] for j in range(len(scalars))}, i)
     return
     
 
-
+def random_swap(arr, p = 0.25):
+    for i in range(len(arr)):
+        for j in range(i+1, len(arr)):
+            if(np.random.rand() < p):
+                arr[j], arr[j-1] = arr[j-1], arr[j]
+    return arr
 
 class CentralRouter:
     def __init__(self, workers, model, test_loader, qv_loader, criterion, lr, max_deg = 3, gamma = 0.1, send_grad = False, deg_scheduler = None):
@@ -86,6 +87,7 @@ class CentralRouter:
         self.worker_tomo_counter = {i: np.zeros((len(workers),)) for i in range(len(workers))}
         self.send_grad = send_grad
         self.deg_scheduler = deg_scheduler
+        self.G_list = []
         
 
         
@@ -98,48 +100,50 @@ class CentralRouter:
                 table[i][j] = param_similarity(self.cached_grads[i], self.cached_grads[j])
                 table[j][i] = table[i][j]
 
-        table = torch.tensor(table)
-        # for i in range(0, n):
-        #    table[i][i] = np.min(table[i, :])
-        # table = -torch.tensor(table)
-        # table = F.softmax((table/self.gamma), dim = 1)
-        # table = -torch.tensor(table)
-        # for i in range(0, n):
-        #    table[i][i] = 0.0
+        for i in range(n):
+            table[i][i] = 0.0 # eliminate the effect of itself
+        # table = torch.tensor(table)
         return table
-
-
-    def compute_state(self):
-        n = len(self.workers)
-        depth = len(self.cached_grads[0])
-        table = np.zeros((n, n, depth))
-        for i in range(0, n):
-            for j in range(i, n):
-                table[i, j, :] = layerwise_similarity(self.cached_grads[i], self.cached_grads[j])
-                table[j, i, :] = table[i, j, :]
-        table = torch.tensor(table)
-        return table
-        
         
 
     def gen_topology(self, route_table):
+        # compute the rank of each worker
         G = nx.DiGraph()
         n = len(self.workers)
+        rank_table = np.zeros((n, n))
+        # rank the workers based on the similarity in an incremental order 
+        for i in range(n):
+            rank_table[i, np.argsort(route_table[i, :])] = list(range(n))
+        # aggregate the rank of each worker at all other workers
+        rank_table = rank_table.sum(axis = 0)
+        # sort the rank in a decremental order
+        rank_table = np.argsort(rank_table).tolist()
+        rank_table.reverse()
+        # print(rank_table)
+
+        assignment_table = [list() for i in range(n)]
+        # begin the assignment
+        for wid in rank_table:
+            desired_list = np.argsort(route_table[wid, :])
+            desired_list = desired_list[::-1]
+            desired_list = random_swap(desired_list)
+            for j in desired_list:
+                if(j!=wid and len(assignment_table[wid]) < self.max_deg and len(assignment_table[j]) < self.max_deg):
+                    # occupy
+                    assignment_table[j].append(wid)
+                    assignment_table[wid].append(j)
+                else:
+                    if(len(assignment_table[wid]) >= self.max_deg):
+                        break
+                    else:
+                        continue
+        # print(assignment_table)        
         G.add_nodes_from(list(range(n)))
         # create channels
-        route_table = route_table.numpy()
-        desired_table = dict()
         for i in range(n):
-            # desired_table[i] = np.argsort(-route_table[i, :])[:self.max_deg].tolist()
-            desired_table[i] = np.random.choice(list(range(n)), size = 3 ,replace = False)
-        # handshake
-        for i in range(n):
-            for j in desired_table[i]:
-                # if(i in desired_table[j]):
-                    G.add_edge(i, j, weight = route_table[i, j])
-        # for i in range(n):
-        #     honest_nbrs = np.argsort(-route_table[i, :])[:self.max_deg]
-        #     self.G.add_edges_from([(i, j) for j in honest_nbrs])
+            for j in (assignment_table[i]):
+                G.add_edge(i, j)
+
         return G
     
     def _local_iter(self):
@@ -154,7 +158,6 @@ class CentralRouter:
     def _aggregate(self, i=0, mode = 'none'):
         table = self.routing_table()
         self.G = self.gen_topology(table)
-        self.state = self.compute_state()
         # compute the page rank
         # pr = nx.pagerank(self.G)
         # self.G = self.gen_topology(table)
@@ -164,7 +167,7 @@ class CentralRouter:
         if(i % 100 == 0):
             logging.info("Credit Table: {}".format(table))
             self.topo_describe(i)
-            print(self.state)
+            self.G_list.append(self.G.copy())
             # logging.info("Page Rank: {}".format(pr))
             
         for idx, nbrs in self.G.adj.items():
@@ -231,8 +234,8 @@ class CentralRouter:
             acc, loss = w.evaluate(T)
             worker_acc.append(acc)
             worker_loss.append(loss)
-        write_group(self.writer, worker_acc, 'acc', T)
-        write_group(self.writer, worker_loss, 'loss', T)
+        # write_group(self.writer, worker_acc, 'acc', T)
+        # write_group(self.writer, worker_loss, 'loss', T)
 
         
     def evaluate(self):
@@ -255,8 +258,8 @@ class CentralRouter:
             if(i % PRINT_FREQ == 0):
                 self.heartbeat(i)
                 acc = self.evaluate()
-                self.writer.add_scalar('data/global_acc', acc, i)
-                logging.debug("Max Deg. {} Round {} Global Accuracy {:.4f}".format(self.max_deg, i, acc))
+                # self.writer.add_scalar('data/global_acc', acc, i)
+                logging.debug("Round {} Global Accuracy {:.4f}".format(i, acc))
                 
 
     def standalone_eval(self):
@@ -265,13 +268,6 @@ class CentralRouter:
             best_acc = w.train_standalone()
             accs.append(best_acc)
         logging.info(accs)
-
-import random
-
-
-def random_sampler(batches):
-    while True:
-        yield random.choice(batches)
 
 
 def init_degree_scheduler(n, max_iter):
@@ -285,75 +281,31 @@ def init_full_connect_scheduler(n, max_iter):
         return n - 1
     return schedule
 
-def init_solo_scheduler(n, max_iter):
+def init_slot_scheduler(n, max_iter, deg):
     def schedule(i):
-        return 1
+        return 2 # which means allow two available slots
     return schedule
 
 
 def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
-    batch_size = 128
+    batch_size = ARGS.bs
     gamma = 1
-    deg = 2
-    send_grad = False
-
-    ROLE = "NO_UPDATE" if send_grad else "UPDATE"
-
-    train_set, test_set = load_dataset(dataset)
-    print(len(train_set))
-    train_loader = CircularFeeder(train_set, verbose = False)
-    #
-    worker_data_size = 6000
-    has_label_flipping = False
-    group_count = 1
-    add_free_rider = False
+    send_grad = True
     standalone = False
-    base_data_size = 5000
+    lr = ARGS.lr
+    deg = 2
+    base_data_size = ARGS.N
+    default_role = 'UPDATE'
+    MODE = ARGS.mode
+    train_set, test_set = load_dataset(dataset)
+    train_loader = CircularFeeder(train_set, verbose = False)
     max_round_count = 10000
+    deg_scheduler = init_slot_scheduler(worker_num, max_round_count, deg)
 
 
-    deg_scheduler = init_solo_scheduler(worker_num, max_round_count)
-
-    logging.debug("Construct a Centralized DDL System {} Download Ratio: {:.4f} Upload Ratio {:.4f}".format(dataset, eta_d, eta_r))
-    # initialize train loaders 
-    train_loaders = []
-
-    logging.debug("Initizalize training loaders {}".format("NORMAL" if not has_label_flipping else "NOISY"))
-    if(has_label_flipping):
-        ratios = np.arange(0, 1.0, 1.0/worker_num)
-        # do a copy of oneself
-        for i in range(len(ratios)//group_count):
-            for j in range(group_count):
-                if(ratios[group_count*i] > 0.5):
-                    ratios[group_count * i]= 1.0
-                ratios[group_count*i + j] = ratios[group_count*i]
-        worker_data_sizes = [worker_data_size for i in range(worker_num)]
-    else:
-        ratios = np.array([0]*worker_num)
-        worker_data_sizes = [base_data_size for i in range(1, worker_num+1)]
-    # print(ratios)
-
-    
-
-    
-
-    # for the central server to estimate the credibility
-    qv_batch_size = 64
-    
-    
-    qv_loader = data_utils.TensorDataset(*train_loader.next(qv_batch_size))
-    qv_loader = data_utils.DataLoader(qv_loader, batch_size = qv_batch_size)
-    qv_loader = cycle(list(qv_loader))
-    lr = 0.1
-
-    
-    for i in range(worker_num):
-        x, y = train_loader.next_with_noise(worker_data_sizes[i], tamper_ratio = ratios[i])
-        logging.info("Worker {} Data Size {} with {} ratio of data with flipped label".format(i, worker_data_sizes[i], ratios[i]))
-        ds = data_utils.TensorDataset(x, y)
-        train_loaders.append(random_sampler(list(data_utils.DataLoader(ds, batch_size = batch_size, shuffle = True))))
-    
-        
+    logging.debug("Construct a Centralized DDL System {} MODE {}".format(dataset, MODE))
+    train_loaders, roles = initialize_mode(MODE, worker_num, train_loader, base_data_size, batch_size)
+  
     test_loader = torch.utils.data.DataLoader(test_set, batch_size = batch_size)
     criterion = F.cross_entropy
     model = model_initializer(dataset)
@@ -361,23 +313,17 @@ def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
     workers = []
      
     for i in range(worker_num):
-        if(not add_free_rider):
-            role = ROLE
-        else:
-            role = "FREE_RIDER" if i == 0 else ROLE
-        workers.append(Worker(i, train_loaders[i], model, criterion, test_loader, batch_size, role = role, lr = lr))
+        workers.append(Worker(i, train_loaders[i], model, criterion, test_loader, batch_size, role = roles[i], lr = lr))
 
-    
-            
+    system = CentralRouter(workers, model, test_loader, None, criterion, lr, max_deg = deg, gamma = gamma, send_grad = send_grad, deg_scheduler = deg_scheduler)
 
-
-        
-    system = CentralRouter(workers, model, test_loader, qv_loader, criterion, lr, max_deg = deg, gamma = gamma, send_grad = send_grad, deg_scheduler = deg_scheduler)
     if(standalone):
         system.standalone_eval()
     else:
         system.execute(max_round = max_round_count)
-                
+    logging.info("Plot Dynamics of Topology ...")
+    plot_topo_dynamic(system.G_list)
+    
 
 
 def confidence_stat(probs_out):

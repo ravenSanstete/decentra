@@ -27,6 +27,12 @@ logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG)
 
 
 
+def init_weights(m):
+    if type(m) in [nn.Linear, nn.Conv2d]:
+        torch.nn.init.xavier_uniform_(m.weight)
+        m.bias.data.fill_(0.0)
+
+
 def generate_two_hop_poison(param, grad, lr):
     K = 2
     # should determine the amplitude of the poison based on the blacksheep's out degree - 1
@@ -41,10 +47,13 @@ class Worker:
         self.generator = batch_generator
         self.model = model
         self.criterion = criterion
+
+        # initialize_param
+        model.apply(init_weights)
         self.param = get_parameter(model)
         self.batch_size = batch_size
         self.grad = None
-        logging.debug("Initialize Worker {} Byzantine: {} Learning Rate: {}".format(wid, role, lr))
+        # logging.debug("Initialize Worker {} Byzantine: {} Learning Rate: {}".format(wid, role, lr))
         self.cached_grads = list()
         self.lr = lr
         self.test_loader = test_loader
@@ -161,13 +170,16 @@ class Worker:
         #     print(self.cached_grads[0][-1])
         #     print(self.param[-1])
             
-        self.param = reduce_gradients(self.cached_grads) #  + [self.param]
+        self.param = reduce_gradients(self.cached_grads)
         # self.param = [x - self.lr * y for x, y in zip(self.param, self.grad)]
         self.cached_grads.clear()
         self.local_clock += 1
 
 
     def aggregate_grad(self):
+        # role back
+        self.param = weighted_reduce_gradients([self.param, self.grad], [1, +self.lr])
+        # then role in
         self.cached_grads += [self.grad]
         grad = reduce_gradients(self.cached_grads)
         self.param = weighted_reduce_gradients([self.param, grad], [1, -self.lr])

@@ -33,18 +33,14 @@ from worker import Worker
 
 logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG, filemode = 'w+')
 
-import argparse
 
+from worker_config import initialize_mode
+from options import parser
 
 # writer = SummaryWriter()
 
 
 
-parser = argparse.ArgumentParser(description='Fairness')
-parser.add_argument("--eta_d", type=float, default=1.0, help = "the proportion of downloadable parameters")
-parser.add_argument("-n", type=int, default=10, help = "the number of workers")
-parser.add_argument("--eta_r", type=float, default=1.0, help = "the proportion of uploading parameters")
-parser.add_argument("--ds", type=str, default="cifar10", help = "the benchmark we use to test")
 ARGS = parser.parse_args()
 
 logger = logging.getLogger('server_logger')
@@ -169,53 +165,22 @@ def random_sampler(batches):
 
 
 def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
-    batch_size = 32
+    batch_size = ARGS.bs
     gamma = 0
-    logging.debug("Construct a Centralized DDL System {} Download Ratio: {:.4f} Upload Ratio {:.4f}".format(dataset, eta_d, eta_r))
+    MODE = ARGS.mode
+    base_data_size = ARGS.N
+    lr = ARGS.lr
+    default_role = 'NO_UPDATE'
+    
+    
+    logging.debug("Construct a Centralized DDL System {} Mode: {}".format(dataset, MODE))
+
     train_set, test_set = load_dataset(dataset)
     train_loader = CircularFeeder(train_set, verbose = False)
-    #
-    worker_data_size = 6000
-    has_label_flipping = False
-    group_count = 1
-    base_data_size = 5000
-
-    # initialize train loaders 
-    train_loaders = []
-
-    logging.debug("Initizalize training loaders {}".format("NORMAL" if not has_label_flipping else "NOISY"))
-    if(has_label_flipping):
-        ratios = np.arange(0, 1.0, 1.0/worker_num)
-        # do a copy of oneself
-        for i in range(len(ratios)//group_count):
-            for j in range(group_count):
-                if(ratios[group_count*i] > 0.5):
-                    ratios[group_count*i] = 1.0
-                ratios[group_count*i + j] = ratios[group_count*i]
-        worker_data_sizes = [worker_data_size for i in range(worker_num)]
-    else:
-        ratios = np.array([0]*worker_num)
-        worker_data_sizes = [base_data_size for i in range(1, worker_num+1)]
-    # print(ratios)
 
 
-    # for the central server to estimate the credibility
-    qv_batch_size = 64
+    train_loaders, roles = initialize_mode(MODE, worker_num, train_loader, base_data_size, batch_size, default_role)
     
-    
-    qv_loader = data_utils.TensorDataset(*train_loader.next(qv_batch_size))
-    qv_loader = data_utils.DataLoader(qv_loader, batch_size = qv_batch_size)
-    qv_loader = cycle(list(qv_loader))
-    lr = 0.01
-
-    FLIPPED = [i >= worker_num // 2 for i in range(worker_num)]
-    for i in range(worker_num):
-        x, y = train_loader.next(worker_data_sizes[i], FLIPPED[i])
-        logging.info("Worker {}  Data Size {} with {} flipped label".format(i, worker_data_sizes[i], FLIPPED))
-        ds = data_utils.TensorDataset(x, y)
-        train_loaders.append(random_sampler(list(data_utils.DataLoader(ds, batch_size = batch_size, shuffle = True))))
-    
-        
     test_loader = torch.utils.data.DataLoader(test_set, batch_size = batch_size)
     criterion = F.cross_entropy
     model = model_initializer(dataset)
@@ -223,9 +188,10 @@ def initialize_sys(dataset = "mnist", worker_num = 1, eta_d = 1.0, eta_r = 1.0):
     workers = []
      
     for i in range(worker_num):
-        workers.append(Worker(i, train_loaders[i], model, criterion, test_loader, batch_size, role = 'NO_UPDATE', lr = lr))
-    
-    system = Central(workers, model, test_loader, qv_loader, criterion, lr, eta_d = eta_d, eta_r = eta_r, gamma = gamma)
+        workers.append(Worker(i, train_loaders[i], model, criterion, test_loader, batch_size, role = roles[i], lr = lr))
+
+
+    system = Central(workers, model, test_loader, None, criterion, lr, eta_d = eta_d, eta_r = eta_r, gamma = gamma)
     system.execute(max_round = 10000)
                 
 
