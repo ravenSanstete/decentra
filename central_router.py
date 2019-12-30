@@ -59,7 +59,7 @@ def write_group(writer, scalars, name, i):
     return
     
 
-def random_swap(arr, p = 0.25):
+def random_swap(arr, p = 0.0):
     for i in range(len(arr)):
         for j in range(i+1, len(arr)):
             if(np.random.rand() < p):
