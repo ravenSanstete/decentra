@@ -20,7 +20,7 @@ from torchvision import datasets, transforms
 from model import model_initializer
 from feeder import CircularFeeder
 from utils import load_dataset, param_distance
-
+from leaf import get_local_datasets
 
 
 import networkx as nx
@@ -40,8 +40,8 @@ import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
 parser = argparse.ArgumentParser(description='Ripple Attack')
-parser.add_argument("--config", "-c", type=str, default='config_toy.txt', help = "path that contains the configuration of the system topology")
-parser.add_argument("--dataset", type=str, default = "mnist", help = 'the dataset we use for testing')
+parser.add_argument("--config", "-c", type=str, default='config/topo_10_small_world.txt', help = "path that contains the configuration of the system topology")
+parser.add_argument("--dataset", type=str, default = "femnist", help = 'the dataset we use for testing')
 parser.add_argument("-b", action="store_true", help = "whether the system topo is bidirectional or not")
 parser.add_argument("--atk", type=str, default="NORMAL", help="the role of worker 0, the only adversary in the system")
 parser.add_argument("-n", type=int, default = 1, help = "the physical worker num")
@@ -62,7 +62,7 @@ np.random.seed(SEED)
 
 
 # Poison eps begin
-poison_list = Queue(maxsize = 2)
+# poison_list = Queue(maxsize = 2)
 # Poison eps end
 
 # P = np.array([[1/3, 1/3, 1/3, 0],
@@ -126,7 +126,7 @@ class Ripple:
                     
     def _local_iter(self, i):
         for idx in self.G.nodes:
-            self. worker_map[idx].local_iter(poison_list, i)
+            self. worker_map[idx].local_iter(i)
         return
 
 
@@ -157,7 +157,7 @@ class Ripple:
             info = "Worker {}'s Neighbor:".format(idx)
             for nbr, _ in nbrs.items():
                 info += str(nbr)+", "
-            #logging.info(info)
+            logging.info(info)
 
 
     """
@@ -173,8 +173,10 @@ class Ripple:
     """
 
     def heartbeat(self, T):
+        print("=================== BEGIN LOGGING {} ===========================".format(T))
         for idx in self.G.nodes:
             self.worker_map[idx].evaluate(T)
+        print("=================== END LOGGING {} ===========================".format(T))
 
     def collect_params(self):
         params = []
@@ -185,7 +187,7 @@ class Ripple:
         
     def execute(self, max_round = 10000):
         IDX = 1
-        PRINT_FREQ = 1
+        PRINT_FREQ = 100
         # check the parameter of the flip17
         
 
@@ -196,17 +198,7 @@ class Ripple:
             #     print(self.worker_map[1].param[-1])
                 
             self.one_round(i)
-            
-            # print MSE of params
-            if i >= 1 and ARGS.atk == "DATT":
-                aim_param = self.worker_map[2].param
-                poison = poison_list.get()
-                print("poison: {}".format(poison[-1]))
-                print("worker 2 ori. param: {}".format(aim_param[-1]))
-                print("step {}: epsilon = {}".format(i, param_distance(poison, aim_param)))
-        
-            # if(i == 1):
-            # print(self.worker_map[1].param)
+
             if(i % PRINT_FREQ == 0):
                 self.heartbeat(T = i)
                 # logging.info("Backward Inference")
@@ -223,13 +215,20 @@ class Ripple:
         """
            
 # construct a homo  
-def initialize_sys(dataset = "mnist", config_path = "config.txt"):
+def initialize_sys(dataset, config_path = "config.txt"):
     batch_size = 32
     FLIP_17 = False
     #logging.debug("Construct a Homogeneous DDL System {}".format(dataset))
-    train_set, test_set = load_dataset(dataset)
-    train_loader = CircularFeeder(train_set, verbose = False)
-    test_loader = torch.utils.data.DataLoader(test_set, batch_size = batch_size)
+
+
+    ### would like to change the way the data is loaded into the system
+    # train_set, test_set = load_dataset(dataset)
+    # train_loader = CircularFeeder(train_set, verbose = False)
+    # test_loader = torch.utils.data.DataLoader(test_set, batch_size = batch_size)
+
+    local_datasets = get_local_datasets(dataset, num_users = 10)
+
+    
     criterion = F.cross_entropy
     model_pool = []
     for i in range(ARGS.n):
@@ -243,7 +242,7 @@ def initialize_sys(dataset = "mnist", config_path = "config.txt"):
     roles = ["NORMAL"]*worker_num
     roles[0] = ARGS.atk
     for i in range(worker_num):
-        workers.append(Worker(i, train_loader, model_pool[0], criterion, test_loader, batch_size, role = roles[i], flipped = FLIP_17, dataset = dataset))
+        workers.append(Worker(i, local_datasets[i][0], model_pool[0], criterion, local_datasets[i][1], batch_size, role = roles[i], flipped = FLIP_17, dataset = dataset))
     
     system = Ripple(config_path, model_pool, workers, directed = not ARGS.b, n=ARGS.n)
     system.topo_describe()

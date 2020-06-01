@@ -202,6 +202,15 @@ def weighted_reduce_gradients(grads, w):
         out = [xx + w[i]*yy for xx, yy in zip(out, grads[i])]
     return out
 
+def max_reduce_gradients(grads):
+    f = lambda x, y: [torch.max(xx, yy) for xx, yy in zip(x, y)]
+    out = list(reduce(f, grads))
+    return [x for x in out]
+
+def mask_gradients(masks, grads):
+    return [mask * grad for (mask, grad) in zip(masks, grads)]
+    
+
 
 def split(flattened, params_example):
     out = []
